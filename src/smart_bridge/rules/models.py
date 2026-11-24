@@ -21,6 +21,14 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+_DURATION_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}$")
+
+
+def _check_duration(value: str) -> None:
+    if not _DURATION_RE.match(value):
+        raise ValueError(f"invalid duration (HH:MM:SS): {value!r}")
+
+
 def _check_clock(value: str | None) -> None:
     if value is None:
         return
@@ -298,8 +306,22 @@ Trigger = Annotated[
 # --- Actions ----------------------------------------------------------------
 
 
+_SERVICE_RE = re.compile(r"^[a-z_]+\.[a-z0-9_]+$")
+
+
 class Action(BaseModel):
-    """Typ wird in M1 geprüft, Parameter je Typ folgen mit dem Executor (M6)."""
+    """Aktion; Parameter je Typ (extra Felder erlaubt, Pflichtfelder werden geprüft).
+
+    - `ha_tool`: `tool`, `arguments`
+    - `ha_service` / `notify`: `service` ("domain.service"), `target`, `data`
+      (`notify`: `message`, `title`, `service` Standard `notify.notify`)
+    - `mqtt_publish`: `topic`, `payload`, `retain`
+    - `webhook`: `url`, `method` (POST|GET|PUT), `body`, `headers`
+    - `delay`: `duration`
+    - `wait_for`: `condition`, `timeout`, `continue_on_timeout`
+    - `choose`: `choices: [{condition, then}]`, `default`
+    - `if`: `condition`, `then`, `else`
+    """
 
     model_config = ConfigDict(extra="allow")
 
@@ -316,6 +338,62 @@ class Action(BaseModel):
     ]
     timeout: Duration | None = None
     retries: int | None = Field(default=None, ge=0, le=10)
+
+    @model_validator(mode="after")
+    def _params(self) -> Action:
+        extra = self.model_extra or {}
+
+        def need(*keys: str) -> None:
+            missing = [k for k in keys if k not in extra]
+            if missing:
+                raise ValueError(f"action {self.type!r} needs {missing}")
+
+        def actions(key: str) -> None:
+            value = extra.get(key)
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"action {self.type!r}: {key!r} must be a non-empty list")
+            for item in value:
+                Action.model_validate(item)
+
+        if self.type == "ha_tool":
+            need("tool")
+        elif self.type in ("ha_service", "notify"):
+            if self.type == "ha_service":
+                need("service")
+            service = extra.get("service")
+            if service is not None and not _SERVICE_RE.match(str(service)):
+                raise ValueError(f"invalid service {service!r}")
+        elif self.type == "mqtt_publish":
+            need("topic", "payload")
+        elif self.type == "webhook":
+            need("url")
+        elif self.type == "delay":
+            need("duration")
+            _check_duration(str(extra["duration"]))
+        elif self.type == "wait_for":
+            need("condition")
+            Condition.model_validate(extra["condition"])
+        elif self.type == "if":
+            need("condition")
+            Condition.model_validate(extra["condition"])
+            actions("then")
+            if "else" in extra:
+                actions("else")
+        elif self.type == "choose":
+            choices = extra.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise ValueError("choose needs a non-empty 'choices' list")
+            for choice in choices:
+                if not isinstance(choice, dict) or "condition" not in choice:
+                    raise ValueError("each choice needs 'condition' and 'then'")
+                Condition.model_validate(choice["condition"])
+                for item in choice.get("then") or []:
+                    Action.model_validate(item)
+                if not choice.get("then"):
+                    raise ValueError("each choice needs 'condition' and 'then'")
+            for item in extra.get("default") or []:
+                Action.model_validate(item)
+        return self
 
 
 # --- Rule -------------------------------------------------------------------

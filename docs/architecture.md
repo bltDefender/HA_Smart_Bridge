@@ -41,7 +41,8 @@ flowchart LR
 | `engine` | Conditions, `for`, `active`, Trigger-Index | M3 |
 | `scheduler` | time/cron/date/sun, Missed-Fire | M4 ✔ |
 | `alerts` | AlertStore, Discovery-Publisher, Ziel-Handshake | M5 ✔ |
-| `executor` | MCP, WS, MQTT, Webhook | M6 |
+| `executor` | MCP, WS, MQTT, Webhook, `rule_runs` | M6 ✔ |
+| `mock_ha` | Mock-HA (WS + MCP) für Dev/Tests | M6 ✔ |
 | `catalog` | Registry-Sync, Embeddings, Qdrant | M8 |
 | `mcp_server` | Claude-Schnittstelle | M9/M10 |
 | `graph`, `ui_api` | RuleGraph, `/ui` | M11 |
@@ -123,7 +124,7 @@ flowchart LR
   - Alert, `on_activate`, `on_clear` sind level-basiert. `for` gilt für die Aktivierung; die Wartezeit startet neu, wenn die Condition zwischenzeitlich falsch wird.
   - `active` über Mitternacht nutzt den Wochentag des Fensterbeginns.
 - **Trigger**: `state` (`from`/`to`/`for`), `numeric_state` (Schwellen-Übergang, Hysterese, `for`), `event` (rekursiver Datenfilter), `mqtt`, `webhook`, `startup`. Erstes Auftauchen einer Entity und reine Attributänderungen sind keine Zustandsübergänge.
-- **Ausgabe**: `AlertActivated`, `AlertCleared`, `ActionsRequested` (mit `run_id`, Trace, `shadow`-Flag) an einen `OutcomeSink`. AlertStore (M5) und Executor (M6) schließen daran an; bis dahin wird geloggt.
+- **Ausgabe**: `AlertActivated`, `AlertCleared`, `ActionsRequested` (mit `run_id`, Trace, `shadow`-Flag) an einen `OutcomeSink`. AlertStore (M5) und Executor (M6) schließen daran an.
 - **Nicht in M3**: Zeit-Trigger und `window_start/end` (M4, Scheduler ruft `reevaluate`), `template` und `per_entity` (M7, solche Regeln werden beim Laden mit Fehler abgelehnt), `mode`, `debounce`, `max_runs_per_hour`, `repeat_after` (M7), `sun` nur mit injiziertem `SunProvider` (M4).
 
 ## M4: Zeit-Scheduler
@@ -146,3 +147,17 @@ Paket `alerts/`:
 - **AlertPublisher**: MQTT-Discovery für `sensor.haus3d_alerts` (retain, Availability über das LWT `smart_bridge/status`), State = Anzahl, Attribute `alerts` + `updated`. Discovery und Stand werden bei jeder (Wieder-)Verbindung neu gesendet (`MqttAdapter(on_connect=…)`); bei Offline-MQTT wird nicht geworfen.
 - **TargetCache**: sendet beim Start `haus3d_command {action: list_targets}`, cached `haus3d_targets` und warnt (Log) bei Regel-Zielen, die weder im Cache noch HA-Entities sind. Nie Abbruch. Ohne Antwort keine Prüfung.
 - **Nicht in M5**: Templates in `title`/`message` (M7), `repeat_after`, `haus3d_command` focus/clear, Snooze-Tool (M9/M10), Warnungen als Alert. Docker und echtes HA/Mosquitto ungetestet.
+
+## M6: Executor, `rule_runs`, Mock-HA
+
+Paket `executor/` (Engine → `ActionsRequested` → Hintergrund-Task je Lauf, die Engine blockiert nie):
+- **Backends/Dispatcher**: `EXECUTOR=mcp` (Standard) versucht MCP, bei Fehler WebSocket-`call_service`; `ws`/`auto` zuerst WS, dann MCP. `ha_tool` braucht MCP und hat keinen Fallback. `ha_service` wird nur für `turn_on`/`turn_off` auf `entity_id`-Zielen ohne Zusatzdaten auf `HassTurnOn`/`HassTurnOff` abgebildet (Name aus `friendly_name`); alles andere geht über WS.
+- **Aktionen**: `ha_tool`, `ha_service`, `notify`, `mqtt_publish`, `webhook`, `delay`, `wait_for` (von Zustandsänderungen geweckt, `timeout`, `continue_on_timeout`), `choose`/`if` (Condition über `engine.eval_condition`).
+- **Robustheit**: Timeout je Aktion (Standard 30 s), Retries mit Exponential-Backoff (Standard 2), Rate-Limit (120/min), Idempotenz-Schlüssel `run_id:pfad` (auch als `Idempotency-Key`-Header bei Webhooks), Abbruch beim ersten Fehlschlag.
+- **Modi**: `shadow` (Stufe 2), globales/Regel-`dry_run` und Pause werten `if`/`choose` aus, führen aber nichts aus; Ergebnis `shadow`/`dry_run`/`paused`.
+- **Kill-Switch**: `POST /api/pause`, `POST /api/resume`, `GET /api/pause`; Zustand persistent (`flags`). Alerts laufen weiter. Der HA-Switch (MQTT-Discovery) fehlt noch. Die `/api`-Schreibendpunkte haben noch keine Authentifizierung (LAN).
+- **`rule_runs`** (SQLite): `run_id, rule_id, phase, trigger, condition_trace, actions, result, duration_ms, executor, started_at`. `phase` (`actions`/`on_activate`/`on_clear`) ist gegenüber der Spezifikation zusätzlich. `GET /api/runs?rule_id=`.
+- **Tool-Discovery**: beim Start `tools/list` per MCP; Regeln mit unbekannten `ha_tool`-Namen werden als Fehler-Alert gemeldet. Schlägt Discovery fehl, wird nur geloggt (`/readyz` → `ha_mcp` down, WS-Fallback bleibt). Nur gesetzt, wenn `HA_MCP_URL` konfiguriert ist.
+- **Mock-HA** (`mock_ha/`, `python -m smart_bridge.mock_ha`, Compose-Profil `dev`): WebSocket (`auth`, `get_states`, `subscribe_events`, `call_service`, `fire_event`) und MCP (`HassTurnOn`, `HassTurnOff`, `GetLiveContext`).
+- **Ungeprüft**: Der HA-MCP-Endpunkt (`/api/mcp`, Streamable HTTP, Bearer = Long-Lived Token) stammt aus dem Gedächtnis, nicht aus der aktuellen HA-Doku (kein Netzzugriff). Docker-Start und echtes HA ungetestet.
+- **Nicht in M6**: Templates in Aktionsparametern, `mode`, `max_runs_per_hour`, Debounce (M7), `repeat_after`, HA-Switch.

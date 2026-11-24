@@ -2,7 +2,7 @@
   "$defs": {
     "Action": {
       "additionalProperties": true,
-      "description": "Typ wird in M1 geprüft, Parameter je Typ folgen mit dem Executor (M6).",
+      "description": "Aktion; Parameter je Typ (extra Felder erlaubt, Pflichtfelder werden geprüft).\n\n- `ha_tool`: `tool`, `arguments`\n- `ha_service` / `notify`: `service` (\"domain.service\"), `target`, `data`\n  (`notify`: `message`, `title`, `service` Standard `notify.notify`)\n- `mqtt_publish`: `topic`, `payload`, `retain`\n- `webhook`: `url`, `method` (POST|GET|PUT), `body`, `headers`\n- `delay`: `duration`\n- `wait_for`: `condition`, `timeout`, `continue_on_timeout`\n- `choose`: `choices: [{condition, then}]`, `default`\n- `if`: `condition`, `then`, `else`",
       "properties": {
         "type": {
           "enum": [
