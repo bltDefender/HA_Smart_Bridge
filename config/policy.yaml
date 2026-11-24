@@ -1,2 +1,18 @@
-# Risikostufen-Policy (Details folgen mit M10). Für Claude/MCP nicht beschreibbar.
+# Risikostufen-Policy. Für Claude/MCP nicht beschreibbar (siehe docs/policy.md).
+# Alle Schlüssel sind optional; fehlende Werte nutzen die eingebauten Standards.
 version: 1
+limits:
+  max_fires_per_day: 20        # Pflicht-Backtest: mehr Auslösungen/Tag -> Regel abgelehnt
+  backtest_days: 7
+  max_activations_per_hour: 30 # Circuit-Breaker: danach wird die Regel deaktiviert
+  writes_per_hour: 30          # Rate-Limit MCP-Schreibaufrufe
+tier1:                         # sofort aktiv (mit Rate-Limit)
+  services: ["light.*", "switch.*", "notify.*", "input_*.*"]
+  deny_services: []
+  deny_entities: []            # z. B. "switch.heizung_*"
+  tools: []                    # erlaubte ha_tool-Namen
+  mqtt_topics: []              # erlaubte mqtt_publish-Topics (Glob)
+  webhook_urls: []
+tier2:                         # Shadow bis zur Freigabe
+  services: ["lock.*", "alarm_control_panel.*", "climate.*", "valve.*"]
+  entities: ["lock.*", "alarm_control_panel.*", "climate.*", "valve.*", "*garage*", "*wallbox*", "*waermepumpe*", "*sg_ready*"]

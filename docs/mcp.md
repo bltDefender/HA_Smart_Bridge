@@ -23,8 +23,16 @@ Ist der Katalog nicht erreichbar, melden die Suchtools einen Fehler („degraded
 
 ## Resources und Prompts
 
-`bridge://docs/rule-schema`, `bridge://docs/rule-examples`, `bridge://policy` (read-only), `bridge://rules/{id}`, `bridge://entities/{entity_id}`, `bridge://alerts`. Prompt `author_rule`: Entities suchen → bestehende Regeln prüfen → entwerfen → simulieren/backtesten → anlegen (M10) → mit `explain_rule` bestätigen.
+`bridge://docs/rule-schema`, `bridge://docs/rule-examples`, `bridge://policy` (read-only), `bridge://rules/{id}`, `bridge://entities/{entity_id}`, `bridge://alerts`. Prompt `author_rule`: Entities suchen → bestehende Regeln prüfen → entwerfen → simulieren/backtesten → anlegen → mit `explain_rule` bestätigen.
 
 ## Schreibende Tools (M10)
 
 `create_rule`, `update_rule`, `set_rule_enabled`, `delete_rule`, `rollback_rule`, `acknowledge_alert`, `set_entity_description`. Neue Tools brauchen Schema, Test, Audit-Eintrag und einen Eintrag in dieser Datei.
+
+- Alle laufen durch `audited`; bei Regeländerungen enthält das Audit einen Unified-Diff (vorher/nachher).
+- Rate-Limit für Regel-Schreibaufrufe: `limits.writes_per_hour` (Policy, Standard 30).
+- `create_rule`/`update_rule` erwarten genau eine Regel. Gesetzt werden `intent`, `created_by: claude`; Commit-Autor `claude-mcp`, Message = `intent`. `status`/`tier` im YAML werden abgelehnt.
+- `locked: true` blockiert alle Schreib-Tools (nur MCP, nicht Dateizugriff).
+- `delete_rule` ist Soft-Delete (`config/rules/.deleted/`); `rollback_rule` stellt auch gelöschte Regeln wieder her. `create_rule` auf eine gelöschte ID wird abgelehnt.
+- Stufe-2-Regeln starten als `shadow`; es gibt bewusst kein Freigabe-Tool (siehe `docs/policy.md`).
+- `acknowledge_alert(id, snooze_minutes)`: 1..10080 Minuten, Alert muss aktiv sein. `set_entity_description`: Text 1..600 Zeichen, braucht den Katalog.

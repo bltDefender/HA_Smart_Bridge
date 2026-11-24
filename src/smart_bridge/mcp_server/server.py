@@ -1,6 +1,6 @@
 """FastMCP-Server (Streamable HTTP unter `/mcp`, Bearer-Token). M9: nur lesende Tools.
 
-Jeder Aufruf landet im Audit-Log (SQLite + JSON-Log). Schreibende Tools folgen in M10 und laufen
+Jeder Aufruf landet im Audit-Log (SQLite + JSON-Log). Schreibende Tools laufen
 durch dieselbe Validierungs-Pipeline wie Dateiänderungen.
 """
 
@@ -22,6 +22,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from ..audit import AuditLog
 from .examples import AUTHOR_RULE_PROMPT
 from .service import ReadService, ToolError
+from .writes import WriteService
 
 ACTOR = "claude-mcp"
 MCP_PATH = "/mcp"
@@ -52,7 +53,7 @@ def _json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, indent=2, default=str)
 
 
-def build_mcp(service: ReadService, audit: AuditLog) -> FastMCP:
+def build_mcp(service: ReadService, audit: AuditLog, writes: WriteService | None = None) -> FastMCP:
     mcp = FastMCP(
         "smart-bridge",
         instructions=(
@@ -142,8 +143,11 @@ def build_mcp(service: ReadService, audit: AuditLog) -> FastMCP:
     @mcp.tool()
     @audited
     async def list_rule_versions(rule_id: str) -> list[dict[str, Any]]:
-        """Versionen einer Regel (Versionierung folgt mit M10, bis dahin leer)."""
+        """Versionen einer Regel aus dem Git-Verlauf (Version, Autor, Zeit, intent)."""
         return service.list_rule_versions(rule_id)
+
+    if writes is not None:
+        _register_write_tools(mcp, audited, writes)
 
     # --- Resources ---------------------------------------------------------------
 
@@ -189,3 +193,50 @@ def guarded_route(mcp: FastMCP, token: str) -> Route:
     """`/mcp`-Route der FastMCP-App, hinter dem Bearer-Token."""
     (route,) = (r for r in mcp.streamable_http_app().routes if isinstance(r, Route))
     return Route(MCP_PATH, BearerAuth(route.endpoint, token))
+
+
+def _register_write_tools(
+    mcp: FastMCP, audited: Callable[..., Callable[..., Awaitable[Any]]], writes: WriteService
+) -> None:
+    @mcp.tool()
+    @audited
+    async def create_rule(rule_yaml: str, intent: str) -> dict[str, Any]:
+        """Legt genau eine Regel an (YAML, Schlüssel `rules`). `intent` = Nutzerwunsch im Wortlaut.
+        Läuft durch die Validierungs-Pipeline; Stufe-2-Regeln starten als `shadow`."""
+        return await writes.create_rule(rule_yaml, intent)
+
+    @mcp.tool()
+    @audited
+    async def update_rule(rule_id: str, rule_yaml: str, intent: str) -> dict[str, Any]:
+        """Ersetzt eine Regel (wie create_rule validiert; gesperrte Regeln werden abgelehnt)."""
+        return await writes.update_rule(rule_id, rule_yaml, intent)
+
+    @mcp.tool()
+    @audited
+    async def set_rule_enabled(rule_id: str, enabled: bool) -> dict[str, Any]:
+        """Aktiviert/deaktiviert eine Regel (hebt auch einen Circuit-Breaker-Stopp auf)."""
+        return await writes.set_rule_enabled(rule_id, enabled)
+
+    @mcp.tool()
+    @audited
+    async def delete_rule(rule_id: str) -> dict[str, Any]:
+        """Soft-Delete: die Regel ist über rollback_rule wiederherstellbar."""
+        return await writes.delete_rule(rule_id)
+
+    @mcp.tool()
+    @audited
+    async def rollback_rule(rule_id: str, version: int) -> dict[str, Any]:
+        """Stellt eine frühere Version wieder her (auch für gelöschte Regeln), erneut validiert."""
+        return await writes.rollback_rule(rule_id, version)
+
+    @mcp.tool()
+    @audited
+    async def acknowledge_alert(id: str, snooze_minutes: int) -> dict[str, Any]:  # noqa: A002
+        """Blendet einen Alert für `snooze_minutes` aus."""
+        return await writes.acknowledge_alert(id, snooze_minutes)
+
+    @mcp.tool()
+    @audited
+    async def set_entity_description(entity_id: str, text: str) -> dict[str, Any]:
+        """Kuratierte Beschreibung für den Katalog (überschreibt den generierten Text)."""
+        return await writes.set_entity_description(entity_id, text)
