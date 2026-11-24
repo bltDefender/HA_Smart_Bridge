@@ -97,6 +97,16 @@ class RunStore:
                 row[key] = json.loads(row[key])
         return rows
 
+    def counts(self, since: datetime) -> list[tuple[str, str, int]]:
+        """Läufe je Regel und UTC-Tag seit `since` (Grundlage der Heatmap)."""
+        cur = self._db.execute(
+            "SELECT rule_id, substr(started_at, 1, 10), COUNT(*) FROM rule_runs"
+            " WHERE started_at >= ? AND result NOT IN ('skipped', 'paused')"
+            " GROUP BY rule_id, substr(started_at, 1, 10) ORDER BY 2, 1",
+            (since.astimezone(UTC).isoformat(),),
+        )
+        return [(str(r), str(d), int(n)) for r, d, n in cur.fetchall()]
+
     def get_flag(self, name: str, default: bool = False) -> bool:
         row = self._db.execute("SELECT value FROM flags WHERE name = ?", (name,)).fetchone()
         return default if row is None else row[0] == "1"

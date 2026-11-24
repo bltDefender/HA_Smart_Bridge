@@ -21,6 +21,7 @@ from .alerts import AlertPublisher, AlertStore, TargetCache
 from .approvals import ApprovalError, ApprovalStore, load_secret
 from .audit import AuditLog
 from .authoring import CircuitBreaker, Pipeline, RuleManager, RuleRepository
+from .authoring.repository import RepositoryError
 from .catalog import (
     REGISTRY_EVENTS,
     Catalog,
@@ -51,6 +52,7 @@ from .scheduler.sun import sun_drift
 from .settings import Settings
 from .simulate import Env, backtest_rule
 from .state import StateStore
+from .ui import UiReader, build_ui_router, rule_to_yaml
 
 log = logging.getLogger(__name__)
 
@@ -517,6 +519,59 @@ def app_factory() -> FastAPI:
     app.router.lifespan_context = lifespan
     if mcp_server is not None and settings.mcp_server_token:
         app.router.routes.append(guarded_route(mcp_server, settings.mcp_server_token))
+
+    def ui_entity(entity_id: str) -> dict[str, Any] | None:
+        st = store.get(entity_id)
+        if st is None:
+            return None
+        return {
+            "name": friendly_name(entity_id) or entity_id,
+            "area": catalog.area_of(entity_id) if catalog else None,
+            "state": st.state,
+            "stale": st.stale,
+        }
+
+    def ui_owner(run_rule_id: str) -> str:
+        rule = engine.rules.get(run_rule_id)
+        return (rule.parent_id if rule and rule.parent_id else None) or run_rule_id
+
+    def ui_alert_active(rule_id: str) -> bool:
+        return any(
+            engine.alert_state(r.id).active
+            for r in engine.rules.values()
+            if r.id == rule_id or r.parent_id == rule_id
+        )
+
+    def ui_version_text(rule_id: str, version: int) -> str:
+        try:
+            return manager.repo.version_text(rule_id, version)
+        except RepositoryError as exc:
+            raise LookupError(str(exc)) from exc
+
+    async def ui_search(query: str, limit: int) -> list[str]:
+        assert catalog is not None
+        return [str(h["rule_id"]) for h in await catalog.search_rules(query, limit)]
+
+    # Der UI-Router bekommt nur lesende Funktionen, nie Executor, Manager oder MCP-Schreibtools.
+    ui_reader = UiReader(
+        rules=lambda: dict(manager.final),
+        tier=policy.tier_of,
+        entity=ui_entity,
+        owner=ui_owner,
+        alert_active=ui_alert_active,
+        runs=run_store.recent,
+        run_counts=run_store.counts,
+        versions=lambda rid: [v.summary() for v in manager.repo.versions(rid)],
+        version_text=ui_version_text,
+        rule_yaml=lambda rid: rule_to_yaml(manager.final[rid]),
+        states=lambda: {
+            eid: {"state": st.state, "stale": st.stale} for eid, st in store.all().items()
+        },
+        alerts=lambda: [x.to_json(settings.zone) for x in alerts.alerts()],
+        now=utc_now,
+        search=ui_search if catalog else None,
+    )
+    app.include_router(build_ui_router(ui_reader, settings.ui_token))
 
     @app.get("/api/state")
     async def api_state() -> dict[str, Any]:
