@@ -126,6 +126,12 @@ class NumericStateTrigger(_Strict):
     hysteresis: float | None = Field(default=None, ge=0)
     for_: Duration | None = Field(default=None, alias="for")
 
+    @model_validator(mode="after")
+    def _bounds(self) -> NumericStateTrigger:
+        if self.above is None and self.below is None:
+            raise ValueError("numeric_state trigger needs 'above' and/or 'below'")
+        return self
+
 
 class EventTrigger(_Strict):
     type: Literal["event"]

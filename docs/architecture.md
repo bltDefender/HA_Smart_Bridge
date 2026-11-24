@@ -112,3 +112,16 @@ flowchart LR
 - `MqttAdapter`: Subscribe, Publish, LWT/Online-Status auf `smart_bridge/status` (retained), Reconnect mit Backoff. Nachrichten werden als `BridgeEvent` an die Engine geliefert (M3).
 - `/readyz` prüft HA (Vollsync erfolgt) und MQTT (verbunden) einzeln, `/api/state` zeigt den Zustand.
 - Noch offen: Integrationstests gegen den Mock-HA im Compose-Profil (M6). Die Adapter sind bis dahin gegen einen In-Process-Fake getestet.
+
+## M3: RuleEngine, Trigger-Index, Event-Listener
+
+- **Trigger-Index** (`engine/index.py`): `entity_id | event | topic | webhook → Einträge`. Ein Event wertet nur betroffene Regeln aus. MQTT-Topics ohne Wildcard per Dict-Lookup, Filter mit `+`/`#` per Liste.
+- **Event-Listener**: `RuleEngine.on_state_change` (am `StateStore` registriert) und `RuleEngine.on_event` (HA-Events, MQTT, Webhook `POST /api/webhooks/{id}`). Vor `start()` (nach der Vollsynchronisation) wird nichts ausgelöst.
+- **Conditions** (`engine/conditions.py`): dreiwertige Logik. Nicht verfügbare Entities ergeben bei `on_unavailable: ignore` „unbekannt“ (Alert-Zustand wird gehalten), bei `deviation` zählen sie als Abweichung. Jeder Knoten liefert einen Trace.
+- **Regelsemantik**:
+  - `actions` laufen, wenn ein Trigger feuert und `active` + Condition wahr sind. Ohne `triggers` feuert jede Zustandsänderung einer Condition-Entity.
+  - Alert, `on_activate`, `on_clear` sind level-basiert. `for` gilt für die Aktivierung; die Wartezeit startet neu, wenn die Condition zwischenzeitlich falsch wird.
+  - `active` über Mitternacht nutzt den Wochentag des Fensterbeginns.
+- **Trigger**: `state` (`from`/`to`/`for`), `numeric_state` (Schwellen-Übergang, Hysterese, `for`), `event` (rekursiver Datenfilter), `mqtt`, `webhook`, `startup`. Erstes Auftauchen einer Entity und reine Attributänderungen sind keine Zustandsübergänge.
+- **Ausgabe**: `AlertActivated`, `AlertCleared`, `ActionsRequested` (mit `run_id`, Trace, `shadow`-Flag) an einen `OutcomeSink`. AlertStore (M5) und Executor (M6) schließen daran an; bis dahin wird geloggt.
+- **Nicht in M3**: Zeit-Trigger und `window_start/end` (M4, Scheduler ruft `reevaluate`), `template` und `per_entity` (M7, solche Regeln werden beim Laden mit Fehler abgelehnt), `mode`, `debounce`, `max_runs_per_hour`, `repeat_after` (M7), `sun` nur mit injiziertem `SunProvider` (M4).

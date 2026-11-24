@@ -49,3 +49,21 @@ def test_app_factory_without_adapters_serves_state(
     with TestClient(app_factory()) as client:
         assert client.get("/api/state").json() == {}
         assert client.get("/readyz").json()["status"] == "ok"
+
+
+def test_webhook_trigger_reaches_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from smart_bridge.api import app_factory
+
+    rules = tmp_path / "config" / "rules"
+    rules.mkdir(parents=True)
+    (rules / "r.yaml").write_text(
+        "rules: [{id: w, triggers: [{type: webhook, webhook_id: abc}], "
+        "actions: [{type: notify, message: hi}]}]"
+    )
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
+    for var in ("HA_URL", "HA_TOKEN", "MQTT_HOST"):
+        monkeypatch.delenv(var, raising=False)
+    with TestClient(app_factory()) as client:
+        assert client.post("/api/webhooks/abc").status_code == 202
+        assert client.post("/api/webhooks/unknown").status_code == 404
