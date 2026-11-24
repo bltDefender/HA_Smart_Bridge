@@ -125,7 +125,7 @@ flowchart LR
   - `active` über Mitternacht nutzt den Wochentag des Fensterbeginns.
 - **Trigger**: `state` (`from`/`to`/`for`), `numeric_state` (Schwellen-Übergang, Hysterese, `for`), `event` (rekursiver Datenfilter), `mqtt`, `webhook`, `startup`. Erstes Auftauchen einer Entity und reine Attributänderungen sind keine Zustandsübergänge.
 - **Ausgabe**: `AlertActivated`, `AlertCleared`, `ActionsRequested` (mit `run_id`, Trace, `shadow`-Flag) an einen `OutcomeSink`. AlertStore (M5) und Executor (M6) schließen daran an.
-- **Nicht in M3**: Zeit-Trigger und `window_start/end` (M4, Scheduler ruft `reevaluate`), `template` und `per_entity` (M7, solche Regeln werden beim Laden mit Fehler abgelehnt), `mode`, `debounce`, `max_runs_per_hour`, `repeat_after` (M7), `sun` nur mit injiziertem `SunProvider` (M4).
+- **Nicht in M3**: Zeit-Trigger und `window_start/end` (M4, Scheduler ruft `reevaluate`), `template`, `per_entity`, `mode`, `debounce`, `max_runs_per_hour` (M7 ✔), `repeat_after` (offen), `sun` nur mit injiziertem `SunProvider` (M4).
 
 ## M4: Zeit-Scheduler
 
@@ -161,3 +161,12 @@ Paket `executor/` (Engine → `ActionsRequested` → Hintergrund-Task je Lauf, d
 - **Mock-HA** (`mock_ha/`, `python -m smart_bridge.mock_ha`, Compose-Profil `dev`): WebSocket (`auth`, `get_states`, `subscribe_events`, `call_service`, `fire_event`) und MCP (`HassTurnOn`, `HassTurnOff`, `GetLiveContext`).
 - **Ungeprüft**: Der HA-MCP-Endpunkt (`/api/mcp`, Streamable HTTP, Bearer = Long-Lived Token) stammt aus dem Gedächtnis, nicht aus der aktuellen HA-Doku (kein Netzzugriff). Docker-Start und echtes HA ungetestet.
 - **Nicht in M6**: Templates in Aktionsparametern, `mode`, `max_runs_per_hour`, Debounce (M7), `repeat_after`, HA-Switch.
+
+## M7: Templates, `per_entity`, `mode`, Debounce, Rate-Limits
+
+- **Templating** (`templating.py`): `SandboxedEnvironment` mit `StrictUndefined`; weder Engine noch Executor kennen HA. `referenced_entities` liest per Jinja-AST die Entities aus `states()`/`is_state()`/`state_attr()`/`has_value()`, damit Template-Regeln im Trigger-Index landen (ohne `triggers` abgeleitet, mit Alert zusätzlich als Level-Eintrag). `Condition.entity_ids(variables)` kennt dafür die `per_entity`-Bindung.
+- **`per_entity`** (`rules/expand.py`): `RuleEngine.load` expandiert vor der Prüfung. Die Kinder tragen `bindings`/`parent_id` (PrivateAttr, nicht im Schema); `engine.rules`, Scheduler und AlertStore sehen nur die expandierten Regeln.
+- **Rendering**: Condition-Templates in `evaluate` (`EvalContext.templater/variables`), Alert-Texte beim Aktivieren (Fehler → Rohtext), Aktionsparameter im Executor unmittelbar vor der Ausführung (Fehler → Lauf `error`, kein Retry).
+- **`mode`** im `ActionExecutor`, je Regel: `single` / `restart` / `queued` / `parallel`. Übersprungene und abgebrochene Läufe erscheinen in `rule_runs` (`skipped`, `cancelled`).
+- **Debounce und Budget** in der Engine: `debounce` ersetzt den wartenden Trigger (Timer `("debounce", rule_id)`), `max_runs_per_hour` zählt gleitend je Regel; `engine.rate_limited` zählt verworfene Läufe.
+- **Nicht in M7**: `repeat_after`, Templates in `alert.target`/Entity-IDs (nur `{{ entity_id }}` statisch), Rate-Limit-Hinweis als Alert, Circuit-Breaker (M10). Docker und echtes HA ungetestet.

@@ -122,7 +122,9 @@ def app_factory() -> FastAPI:
         is_workday=workday_provider(settings.holiday_country, settings.holiday_subdiv),
     )
     store.subscribe(engine.on_state_change)
-    alerts = AlertStore(lambda: engine.rules, settings.data_dir / "bridge.db", utc_now)
+    alerts = AlertStore(
+        lambda: engine.rules, settings.data_dir / "bridge.db", utc_now, engine.templater.render
+    )
     load_errors = engine.load(_load_rules(settings.config_dir / "rules"))
     for rule_id, problem in load_errors.items():
         log.error("rule %s rejected: %s", rule_id, problem)
@@ -200,6 +202,7 @@ def app_factory() -> FastAPI:
         mqtt_publish=mqtt.publish if mqtt else None,
         http=http_request,
         dry_run=settings.dry_run,
+        templater=engine.templater,
     )
 
     async def on_state(change: Any) -> None:

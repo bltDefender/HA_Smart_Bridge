@@ -6,14 +6,15 @@ Bei `deviation` zählt eine nicht verfügbare Entity als erfüllte Abweichung.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 from ..rules.models import ActiveWindow, Condition, SunWindow, TimeCond
 from ..state import EntityState
+from ..templating import Templater
 from ..timeutil import parse_clock, parse_duration
 
 UNAVAILABLE = frozenset({"unavailable", "unknown"})
@@ -45,6 +46,8 @@ class EvalContext:
     on_unavailable: Literal["ignore", "deviation"] = "ignore"
     sun: SunProvider | None = None
     is_workday: Callable[[date], bool] = lambda d: d.weekday() < 5
+    templater: Templater | None = None
+    variables: Mapping[str, Any] = field(default_factory=dict)
 
     @property
     def local_now(self) -> datetime:
@@ -152,6 +155,8 @@ def evaluate(cond: Condition, ctx: EvalContext) -> TraceNode:
             return TraceNode("numeric_state", _unavailable(ctx), f"{n.entity_id}=n/a")
         ok = (n.above is None or value > n.above) and (n.below is None or value < n.below)
         return TraceNode("numeric_state", ok, f"{n.entity_id}={value}")
+    if cond.template is not None:
+        return _template(cond.template.value_template, ctx)
     if cond.time is not None:
         return evaluate_window(cond.time, ctx)
     if cond.sun is not None:
@@ -168,14 +173,30 @@ def evaluate(cond: Condition, ctx: EvalContext) -> TraceNode:
     if cond.not_ is not None:
         kid = evaluate(cond.not_, ctx)
         return TraceNode("not", None if kid.result is None else not kid.result, children=(kid,))
-    raise ValueError("unsupported condition")  # template: M7
+    raise ValueError("unsupported condition")
+
+
+_TRUE = frozenset({"true", "on", "yes", "1"})
+_FALSE = frozenset({"false", "off", "no", "0", "", "none"})
+
+
+def _template(text: str, ctx: EvalContext) -> TraceNode:
+    if ctx.templater is None:
+        return TraceNode("template", None, "no templater")
+    try:
+        out = ctx.templater.render(text, ctx.variables).lower()
+    except ValueError as exc:  # TemplateError: Zustand halten statt Abweichung melden
+        return TraceNode("template", None, f"error: {exc}")
+    if out in _TRUE:
+        return TraceNode("template", True, out)
+    if out in _FALSE:
+        return TraceNode("template", False, out)
+    return TraceNode("template", None, f"not boolean: {out!r}")
 
 
 def unsupported_kinds(cond: Condition, sun_available: bool) -> set[str]:
     """Condition-Arten, die diese Engine-Konfiguration nicht auswerten kann."""
     found: set[str] = set()
-    if cond.template is not None:
-        found.add("template")
     if cond.sun is not None and not sun_available:
         found.add("sun")
     for child in [*(cond.and_ or []), *(cond.or_ or []), *([cond.not_] if cond.not_ else [])]:

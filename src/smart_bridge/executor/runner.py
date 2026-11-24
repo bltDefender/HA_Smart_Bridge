@@ -14,6 +14,7 @@ from ..clock import Now, utc_now
 from ..engine.conditions import TraceNode
 from ..engine.outcomes import ActionsRequested
 from ..rules.models import Action, Condition, Rule
+from ..templating import Templater
 from ..timeutil import parse_duration
 from .dispatch import Dispatcher
 from .errors import ActionError, UnsupportedActionError
@@ -26,6 +27,7 @@ MqttPublish = Callable[[str, str, bool], Awaitable[None]]
 HttpRequest = Callable[[str, str, dict[str, str], Any], Awaitable[int]]
 EvalCondition = Callable[[str, Condition], bool | None]
 
+MAX_QUEUED = 10
 DEFAULT_TIMEOUT = 30.0
 DEFAULT_WAIT_CAP = 3600.0
 PAUSE_FLAG = "paused"
@@ -88,13 +90,18 @@ class ActionExecutor:
         backoff_base: float = 1.0,
         max_actions_per_minute: int = 120,
         monotonic: Callable[[], float] = time.monotonic,
+        templater: Templater | None = None,
     ) -> None:
         self._d, self._store, self._rules = dispatcher, store, rules
         self._eval, self._mqtt, self._http = eval_condition, mqtt_publish, http
         self._now, self._sleep, self.dry_run = now, sleep, dry_run
         self._retries, self._backoff = default_retries, backoff_base
         self._limit, self._monotonic = max_actions_per_minute, monotonic
+        self._templater = templater
         self._window: deque[float] = deque()
+        self._running: dict[str, list[asyncio.Task[Any]]] = {}
+        self._queued: dict[str, int] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
         self._done: set[str] = set()
         self._changed = asyncio.Event()
         self.paused = store.get_flag(PAUSE_FLAG)
@@ -112,6 +119,50 @@ class ActionExecutor:
     # --- Lauf ------------------------------------------------------------
 
     async def run(self, req: ActionsRequested) -> RunRecord:
+        """Lauf gemäß `mode` der Regel: single | restart | queued | parallel."""
+        rule = self._rules().get(req.rule_id)
+        mode = rule.mode if rule else "single"
+        running = self._running.setdefault(req.rule_id, [])
+        if mode == "single" and running:
+            return self._skipped(req, "mode single: previous run still active")
+        if mode == "restart":
+            for task in running:
+                task.cancel()
+        if mode == "queued":
+            if self._queued.get(req.rule_id, 0) >= MAX_QUEUED:
+                return self._skipped(req, f"mode queued: more than {MAX_QUEUED} runs waiting")
+            self._queued[req.rule_id] = self._queued.get(req.rule_id, 0) + 1
+            async with self._locks.setdefault(req.rule_id, asyncio.Lock()):
+                self._queued[req.rule_id] -= 1
+                return await self._tracked(req, running)
+        return await self._tracked(req, running)
+
+    async def _tracked(self, req: ActionsRequested, running: list[asyncio.Task[Any]]) -> RunRecord:
+        task = asyncio.current_task()
+        if task is not None:
+            running.append(task)
+        try:
+            return await self._run(req)
+        finally:
+            if task is not None and task in running:
+                running.remove(task)
+
+    def _skipped(self, req: ActionsRequested, reason: str) -> RunRecord:
+        record = RunRecord(
+            req.run_id,
+            req.rule_id,
+            req.phase,
+            {"type": req.trigger.type, "at": req.trigger.at.isoformat()},
+            trace_to_dict(req.trace),
+            "skipped",
+            self._now(),
+            steps=[StepResult("-", "mode", "skipped", detail=reason)],
+        )
+        self._store.save(record)
+        log.info("run %s rule=%s skipped: %s", req.run_id, req.rule_id, reason)
+        return record
+
+    async def _run(self, req: ActionsRequested) -> RunRecord:
         started = self._now()
         t0 = self._monotonic()
         rule = self._rules().get(req.rule_id)
@@ -140,10 +191,18 @@ class ActionExecutor:
                 record.result = mode if mode in ("shadow", "dry_run") else "ok"
         except _Stop:
             record.result = "error"
+        except asyncio.CancelledError:
+            record.result = "cancelled"  # `restart` oder Shutdown
+            self._finish(record, t0, used)
+            raise
         except Exception as exc:  # Programmfehler darf den Lauf nicht verschwinden lassen
             log.exception("run %s crashed", req.run_id)
             record.steps.append(StepResult("?", "internal", "error", error=repr(exc)))
             record.result = "error"
+        self._finish(record, t0, used)
+        return record
+
+    def _finish(self, record: RunRecord, t0: float, used: list[str]) -> None:
         record.duration_ms = int((self._monotonic() - t0) * 1000)
         record.executor = "+".join(sorted(set(used))) or "-"
         self._store.save(record)
@@ -155,7 +214,6 @@ class ActionExecutor:
             record.result,
             record.executor,
         )
-        return record
 
     def _mode(self, req: ActionsRequested, rule: Rule | None) -> str:
         if self.paused:
@@ -221,13 +279,33 @@ class ActionExecutor:
                     step.detail = "duplicate (idempotent)"
                     finish("skipped")
                     return
-                await self._leaf(req, action, extra, step, key, used)
+                await self._leaf(req, action, self._render(req, extra), step, key, used)
                 self._done.add(key)
         except ActionError as exc:
             step.status, step.error = "error", str(exc)
             finish()
             raise _Stop from exc
         finish()
+
+    def _render(self, req: ActionsRequested, extra: dict[str, Any]) -> dict[str, Any]:
+        if self._templater is None:
+            return extra
+        rule = self._rules().get(req.rule_id)
+        variables: dict[str, Any] = {
+            **(rule.bindings if rule else {}),
+            "rule_id": req.rule_id,
+            "run_id": req.run_id,
+            "trigger": {
+                "type": req.trigger.type,
+                "entity_id": req.trigger.entity_id,
+                **req.trigger.data,
+            },
+        }
+        try:
+            rendered: dict[str, Any] = self._templater.render_deep(extra, variables)
+        except ValueError as exc:  # TemplateError
+            raise ActionError(f"template: {exc}") from exc
+        return rendered
 
     def _branch(
         self, rule_id: str, action: Action, extra: dict[str, Any]

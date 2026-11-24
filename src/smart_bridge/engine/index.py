@@ -50,7 +50,7 @@ class TriggerIndex:
         return sorted({*self._mqtt_exact, *(f for f, _ in self._mqtt_wild)})
 
     def add(self, rule: Rule) -> None:
-        cond_entities = sorted(rule.condition.entity_ids()) if rule.condition else []
+        cond_entities = sorted(rule.condition.entity_ids(rule.bindings)) if rule.condition else []
         if not rule.triggers:
             for eid in cond_entities:
                 self.entity[eid].append(Entry(rule.id, "derived"))
