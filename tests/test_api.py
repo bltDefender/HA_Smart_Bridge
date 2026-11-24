@@ -1,3 +1,6 @@
+from pathlib import Path
+
+import pytest
 from fastapi.testclient import TestClient
 
 from smart_bridge.api import create_app
@@ -33,3 +36,16 @@ def test_qdrant_down_is_only_degraded() -> None:
 def test_ha_down_is_503_and_exception_is_down() -> None:
     assert _client({"ha": "down"}).get("/readyz").status_code == 503
     assert _client({"mqtt": "raise"}).get("/readyz").status_code == 503
+
+
+def test_app_factory_without_adapters_serves_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from smart_bridge.api import app_factory
+
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    for var in ("HA_URL", "HA_TOKEN", "MQTT_HOST"):
+        monkeypatch.delenv(var, raising=False)
+    with TestClient(app_factory()) as client:
+        assert client.get("/api/state").json() == {}
+        assert client.get("/readyz").json()["status"] == "ok"

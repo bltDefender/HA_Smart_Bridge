@@ -103,3 +103,12 @@ flowchart LR
 - Risikostufe wird aus dem Inhalt bestimmt (`config/policy.yaml`), nie aus dem Pfad.
 - `policy.yaml` und `approvals/` sind für Claude/MCP nicht beschreibbar. Stufe-2-Freigabe nur per signiertem Webhook oder CLI.
 - `/ui/*` ist ausschließlich `GET`/`HEAD`.
+
+## M2: StateStore und Adapter
+
+- `StateStore` hält den Zustand im Speicher, schreibt durch nach `state_snapshot` (SQLite) und meldet `StateChange` an Listener. Nach einem Neustart sind alle geladenen Entities `stale`, bis die Vollsynchronisation lief.
+- Stale-Wechsel und identische Updates erzeugen kein `StateChange`. `last_changed` bleibt bei reinen Attributänderungen erhalten.
+- `HaWebSocket`: Auth, Subscriptions (`state_changed`, Registry-Events, `haus3d_targets`), danach `get_states` als Vollsync. Events während des Syncs werden gepuffert und danach in Reihenfolge angewendet. Bei Verbindungsverlust: Entities `stale`, Reconnect mit Backoff. Ungültiges Token ist fatal (kein Retry). Ausgehend: `call_service`, `fire_event` (Fallback-Executor in M6).
+- `MqttAdapter`: Subscribe, Publish, LWT/Online-Status auf `smart_bridge/status` (retained), Reconnect mit Backoff. Nachrichten werden als `BridgeEvent` an die Engine geliefert (M3).
+- `/readyz` prüft HA (Vollsync erfolgt) und MQTT (verbunden) einzeln, `/api/state` zeigt den Zustand.
+- Noch offen: Integrationstests gegen den Mock-HA im Compose-Profil (M6). Die Adapter sind bis dahin gegen einen In-Process-Fake getestet.
