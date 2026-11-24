@@ -39,7 +39,7 @@ flowchart LR
 | `state` | StateStore, `stale`-Handling | M2 |
 | `adapters` | HA-WS, MQTT | M2 |
 | `engine` | Conditions, `for`, `active`, Trigger-Index | M3 |
-| `scheduler` | time/cron/date/sun, Missed-Fire | M4 |
+| `scheduler` | time/cron/date/sun, Missed-Fire | M4 ✔ |
 | `alerts` | AlertStore, Discovery-Publisher | M5 |
 | `executor` | MCP, WS, MQTT, Webhook | M6 |
 | `catalog` | Registry-Sync, Embeddings, Qdrant | M8 |
@@ -125,3 +125,16 @@ flowchart LR
 - **Trigger**: `state` (`from`/`to`/`for`), `numeric_state` (Schwellen-Übergang, Hysterese, `for`), `event` (rekursiver Datenfilter), `mqtt`, `webhook`, `startup`. Erstes Auftauchen einer Entity und reine Attributänderungen sind keine Zustandsübergänge.
 - **Ausgabe**: `AlertActivated`, `AlertCleared`, `ActionsRequested` (mit `run_id`, Trace, `shadow`-Flag) an einen `OutcomeSink`. AlertStore (M5) und Executor (M6) schließen daran an; bis dahin wird geloggt.
 - **Nicht in M3**: Zeit-Trigger und `window_start/end` (M4, Scheduler ruft `reevaluate`), `template` und `per_entity` (M7, solche Regeln werden beim Laden mit Fehler abgelehnt), `mode`, `debounce`, `max_runs_per_hour`, `repeat_after` (M7), `sun` nur mit injiziertem `SunProvider` (M4).
+
+## M4: Zeit-Scheduler
+
+Paket `scheduler/`: `nextfire.py` (rein, berechnet den nächsten Feuerzeitpunkt), `scheduler.py` (Jobs, Timer, Missed-Fire), `store.py` (`fire_times`), `sun.py` (astral), `calendar.py` (`holidays`).
+
+- **Kein Polling**: je Trigger ein Timer bis zum berechneten Zeitpunkt, in Schritten von höchstens 1 h (Uhrsprünge/Suspend). Beim Aufwachen wird gegen die Uhr geprüft. Alle Vergleiche laufen in UTC.
+- **DST**: `time`/`date`/Cron mit fester Stunde: Lücke (z. B. 02:30 am Frühjahrstag) → verschoben (03:30), doppelte Stunde → einmal (erstes Vorkommen). Muster mit Stundenjoker (`*/30 * * * *`) → Lückenzeiten entfallen, in der doppelten Stunde feuert jedes Vorkommen. `interval` rechnet absolut. `time_pattern` wird zu 6-Feld-Cron.
+- **Sonne**: lokal mit astral (`LATITUDE`/`LONGITUDE`/`TZ`). Polartag/-nacht: Ereignis entfällt für den Tag, der Scheduler sucht das nächste (bis ~1 Jahr). Sun-Bedingung ohne Ereignis ist `None` (unbekannt). Nach dem Start Warnung, wenn `sun.sun.next_setting` um > 5 min abweicht.
+- **Fensterwechsel**: `active.after/before/sun`, `time`/`sun`-Bedingungen und `workday` (Mitternacht) erzeugen nicht persistierte Jobs, die `engine.reevaluate(rule_id)` aufrufen (nur Regeln mit Alert-Pegel).
+- **Missed-Fire** (`catch_up`): beim Start wird ein persistierter `next_fire <= jetzt` mit gleichem Spec-Hash behandelt: `none` überspringt, `once` feuert einmal, `within` nur wenn die Verspätung ≤ Fenster. Nachholläufe tragen `data.catch_up`/`scheduled_at`. Erster Start oder geänderter Trigger holt nichts nach. `interval` behält die Phase.
+- **Werktage**: `workday` per `holidays` (`HOLIDAY_COUNTRY=DE`, `HOLIDAY_SUBDIV=BB`).
+- **Engine**: neu `on_time_trigger(rule_id, idx, at, data)` (führt Condition und Aktionen wie ein Event-Trigger aus) und `rules`.
+- **Nicht getestet**: Docker-Start, Lauf gegen echtes HA.

@@ -6,6 +6,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,8 @@ from .clock import utc_now
 from .engine import AsyncioTimers, Outcome, RuleEngine
 from .events import BridgeEvent
 from .rules import Rule, duplicate_ids, load_dir
+from .scheduler import AstralSun, FireTimeStore, Scheduler, workday_provider
+from .scheduler.sun import sun_drift
 from .settings import Settings
 from .state import StateStore
 
@@ -87,10 +90,32 @@ def app_factory() -> FastAPI:
         log.info("outcome %s", outcome)  # AlertStore (M5) und Executor (M6) folgen
 
     timers = AsyncioTimers()
-    engine = RuleEngine(store, outcome_sink, now=utc_now, timers=timers, zone=settings.zone)
+    sun = AstralSun(settings.latitude, settings.longitude, settings.zone)
+    engine = RuleEngine(
+        store,
+        outcome_sink,
+        now=utc_now,
+        timers=timers,
+        zone=settings.zone,
+        sun=sun,
+        is_workday=workday_provider(settings.holiday_country, settings.holiday_subdiv),
+    )
     store.subscribe(engine.on_state_change)
     for rule_id, problem in engine.load(_load_rules(settings.config_dir / "rules")).items():
         log.error("rule %s rejected: %s", rule_id, problem)  # Fehler-Alert folgt mit M5
+
+    fire_store = FireTimeStore(settings.data_dir / "bridge.db")
+    scheduler = Scheduler(
+        now=utc_now,
+        timers=AsyncioTimers(),
+        zone=settings.zone,
+        store=fire_store,
+        sun=sun,
+        on_trigger=engine.on_time_trigger,
+        on_window=engine.reevaluate,
+    )
+    for rule_id, problem in scheduler.load(list(engine.rules.values())).errors.items():
+        log.error("rule %s has unschedulable triggers: %s", rule_id, problem)
 
     async def sink(event: BridgeEvent) -> None:
         await engine.on_event(event)
@@ -106,10 +131,22 @@ def app_factory() -> FastAPI:
         else None
     )
 
+    def _check_sun_drift() -> None:
+        """Warnung, wenn `sun.sun` in HA und die lokale astral-Berechnung auseinanderliegen."""
+        state = store.get("sun.sun")
+        raw = state.attributes.get("next_setting") if state else None
+        if not isinstance(raw, str):
+            return
+        drift = sun_drift(raw, sun, settings.zone, timedelta(minutes=5))
+        if drift is not None:
+            log.warning("sun.sun differs from local sun calculation by %s", drift)
+
     async def start_engine() -> None:
         if ha:
             await ha.synced.wait()  # erst nach der Vollsynchronisation
         await engine.start()
+        await scheduler.start()
+        _check_sun_drift()
 
     checks: dict[str, Check] = {}
     if ha:
@@ -128,6 +165,8 @@ def app_factory() -> FastAPI:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
             timers.cancel_all()
+            scheduler.stop()
+            fire_store.close()
             store.close()
 
     app = create_app(settings, checks)

@@ -38,6 +38,8 @@ class Settings:
     latitude: float = 52.4
     longitude: float = 13.1
     tz: str = "Europe/Berlin"
+    holiday_country: str = "DE"
+    holiday_subdiv: str | None = "BB"
     log_level: str = "INFO"
     dry_run: bool = False
     executor: str = "mcp"
@@ -71,6 +73,8 @@ class Settings:
             latitude=float(e.get("LATITUDE", "52.4")),
             longitude=float(e.get("LONGITUDE", "13.1")),
             tz=tz,
+            holiday_country=e.get("HOLIDAY_COUNTRY", "DE"),
+            holiday_subdiv=e.get("HOLIDAY_SUBDIV", "BB") or None,
             log_level=e.get("LOG_LEVEL", "INFO").upper(),
             dry_run=_bool(e.get("DRY_RUN"), False),
             executor=executor,

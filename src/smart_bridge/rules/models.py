@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
 import re
 from typing import Annotated, Any, Literal
 
+from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 Duration = Annotated[str, StringConstraints(pattern=r"^-?\d{1,2}:\d{2}:\d{2}$")]
@@ -177,29 +179,88 @@ class TimeTrigger(_MissedFire):
         return self
 
 
+_PATTERN_RE = re.compile(r"^(\*|\d{1,2}|/\d{1,2}|\*/\d{1,2})$")
+_PATTERN_MAX = {"hours": 23, "minutes": 59, "seconds": 59}
+_FULL_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_MONTH_DAY = re.compile(r"^\d{2}-\d{2}$")
+
+
 class TimePatternTrigger(_MissedFire):
     type: Literal["time_pattern"]
     hours: str | None = None
     minutes: str | None = None
     seconds: str | None = None
 
+    @model_validator(mode="after")
+    def _fields(self) -> TimePatternTrigger:
+        given = {k: getattr(self, k) for k in _PATTERN_MAX if getattr(self, k) is not None}
+        if not given:
+            raise ValueError("time_pattern needs hours, minutes and/or seconds")
+        for name, value in given.items():
+            if not _PATTERN_RE.match(value):
+                raise ValueError(f"invalid {name} pattern: {value!r}")
+            digits = value.lstrip("*/")
+            if digits:
+                n = int(digits)
+                too_big = n > _PATTERN_MAX[name]
+                if too_big or ("/" in value and n == 0):
+                    raise ValueError(f"{name} out of range: {value!r}")
+        return self
+
 
 class CronTrigger(_MissedFire):
     type: Literal["cron"]
     expression: str
+
+    @model_validator(mode="after")
+    def _valid(self) -> CronTrigger:
+        if len(self.expression.split()) not in (5, 6) or not croniter.is_valid(self.expression):
+            raise ValueError(f"invalid cron expression: {self.expression!r}")
+        return self
 
 
 class IntervalTrigger(_MissedFire):
     type: Literal["interval"]
     every: Duration
 
+    @model_validator(mode="after")
+    def _positive(self) -> IntervalTrigger:
+        if self.every.startswith("-") or self.every == "00:00:00":
+            raise ValueError("interval must be positive")
+        return self
+
 
 class DateTrigger(_MissedFire):
+    """Einmalig (`on: YYYY-MM-DD`), jährlich (`yearly`, `on: MM-DD`) oder Bereich (`from`/`to`)."""
+
     type: Literal["date"]
     on: str | None = None
     yearly: bool = False
     from_: str | None = Field(default=None, alias="from")
     to: str | None = None
+    at: Clock = "00:00"
+
+    @model_validator(mode="after")
+    def _shape(self) -> DateTrigger:
+        _check_clock(self.at)
+        ranged = self.from_ is not None or self.to is not None
+        if (self.on is None) == (not ranged):
+            raise ValueError("date needs either 'on' or 'from'+'to'")
+        if ranged and (self.from_ is None or self.to is None):
+            raise ValueError("date range needs both 'from' and 'to'")
+        values = [v for v in (self.on, self.from_, self.to) if v is not None]
+        for v in values:
+            allowed = (_MONTH_DAY, _FULL_DATE) if self.yearly else (_FULL_DATE,)
+            if not any(r.match(v) for r in allowed):
+                raise ValueError(f"invalid date {v!r} (yearly: MM-DD, otherwise YYYY-MM-DD)")
+            probe = v if len(v) == 10 else f"2024-{v}"  # 2024: Schaltjahr
+            try:
+                datetime.date.fromisoformat(probe)
+            except ValueError as exc:
+                raise ValueError(f"invalid date {v!r}") from exc
+        if ranged and not self.yearly and self.from_ and self.to and self.from_ > self.to:
+            raise ValueError("date range: 'from' must not be after 'to'")
+        return self
 
 
 class SunTrigger(_MissedFire):
