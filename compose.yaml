@@ -1,0 +1,34 @@
+services:
+  bridge:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/app/config
+      - ./config/policy.yaml:/app/config/policy.yaml:ro
+      - ./data/bridge:/app/data
+    secrets: [ha_token, mcp_server_token]
+    depends_on: [qdrant]
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    restart: unless-stopped
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    expose: ["6333"]
+
+  # Dev-Profil: lokaler Broker. Mock-HA (WebSocket + MCP) folgt mit M6.
+  mosquitto:
+    profiles: [dev]
+    image: eclipse-mosquitto:2
+    command: mosquitto -c /mosquitto-no-auth.conf
+    ports:
+      - "1883:1883"
+
+secrets:
+  ha_token:
+    file: ./secrets/ha_token.txt
+  mcp_server_token:
+    file: ./secrets/mcp_server_token.txt

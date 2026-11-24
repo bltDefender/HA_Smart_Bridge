@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+node_modules/
+.env
+secrets/*
+!secrets/.gitkeep
+data/
+
+config/approvals/*
+!config/approvals/.gitkeep
