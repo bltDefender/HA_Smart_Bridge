@@ -42,7 +42,8 @@ AUTHOR_RULE_PROMPT = """Lege aus dem Wunsch des Nutzers eine Regel an. Halte die
    Den Wunsch des Nutzers im Wortlaut als `intent` übernehmen. `tier` nicht angeben.
 4. `simulate_rule` gegen den aktuellen Zustand, dann `backtest_rule` (mindestens 7 Tage).
    Feuert die Regel zu oft, Bedingung oder `for`/`debounce` anpassen.
-5. Anlegen mit `create_rule` (ab M10 verfügbar). Kritische Aktionen (Stufe 2) laufen zuerst als
+5. Anlegen mit `create_rule` (Ergebnis: Stufe, Status, Warnungen, Konflikte, Backtest).
+   Kritische Aktionen (Stufe 2) laufen zuerst als
    `shadow` und brauchen eine Freigabe außerhalb von MCP; sie lassen sich nicht umgehen.
 6. Dem Nutzer das Ergebnis mit `explain_rule` in Klartext bestätigen.
 

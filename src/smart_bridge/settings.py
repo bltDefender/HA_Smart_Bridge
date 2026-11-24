@@ -47,6 +47,11 @@ class Settings:
     executor: str = "mcp"
     config_dir: Path = Path("config")
     data_dir: Path = Path("data")
+    approval_notify_service: str | None = None
+    bridge_public_url: str | None = None
+    approval_secret: str | None = None
+    approval_ttl_hours: int = 24
+    rule_scan_seconds: float = 2.0
 
     @property
     def zone(self) -> ZoneInfo:
@@ -84,4 +89,9 @@ class Settings:
             executor=executor,
             config_dir=Path(e.get("CONFIG_DIR", "config")),
             data_dir=Path(e.get("DATA_DIR", "data")),
+            approval_notify_service=e.get("APPROVAL_NOTIFY_SERVICE") or None,
+            bridge_public_url=(e.get("BRIDGE_PUBLIC_URL") or "").rstrip("/") or None,
+            approval_secret=_secret(e, "APPROVAL_SECRET"),
+            approval_ttl_hours=int(e.get("APPROVAL_TTL_HOURS", "24")),
+            rule_scan_seconds=float(e.get("RULE_SCAN_SECONDS", "2")),
         )

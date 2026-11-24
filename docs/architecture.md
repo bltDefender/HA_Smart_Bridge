@@ -192,4 +192,11 @@ Paket `executor/` (Engine → `ActionsRequested` → Hintergrund-Task je Lauf, d
 - **Grenzen des Backtests**: Es werden nur Zustandswechsel aus `state_history` nachgespielt. Zeit-/Sonnen-Trigger und Fensterwechsel nicht (`unreplayed_triggers`, `notes`). Entities ohne Historie stehen in `entities_without_history`. Eine neue Regel erfasst erst ab Anlage Historie (M10 nimmt ihre Entities in die Aufzeichnung auf).
 - **Audit** (`audit.py`): Tabelle `audit_log` in SQLite plus JSON-Log; Details werden von Token/Secret/Passwort-Schlüsseln bereinigt. Jeder Tool-, Resource- und Prompt-Aufruf wird protokolliert (Akteur `claude-mcp`).
 - **Resources/Prompt**: `bridge://docs/rule-schema`, `docs/rule-examples`, `policy` (read-only), `rules/{id}`, `entities/{entity_id}`, `alerts`; Prompt `author_rule`.
-- **Nicht in M9**: schreibende Tools, Versionierung (`list_rule_versions` liefert bis M10 `[]`), `acknowledge_alert`, `set_entity_description`. Docker und echtes HA ungetestet.
+- Schreibende Tools und Versionierung kamen mit M10 (siehe unten). Docker und echtes HA ungetestet.
+
+## M10 – Rule-Authoring
+Komponenten: `policy.py` (Stufen), `authoring/pipeline.py` (Validierung), `authoring/repository.py` (Git, Soft-Delete), `authoring/manager.py` (Watcher, MCP-Schreibpfad, Status), `authoring/breaker.py`, `approvals.py`, `mcp_server/writes.py`. Details in `docs/policy.md`.
+
+Tabellen: `approval_tokens` (Einmal-Nonces), `rule_trips` (Circuit-Breaker), `audit_log` (mit Diff).
+
+Grenzen: Beim Start laufen weder Entity-Prüfung noch Backtest (HA noch nicht synchronisiert); Zyklen nur ab 2 Regeln; entfernte MQTT-Topics bleiben bis zum Reconnect abonniert. Docker, echtes HA und der HA-Button-Flow sind ungetestet.

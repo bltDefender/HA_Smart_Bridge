@@ -142,6 +142,16 @@ class AlertStore:
                 self._db.execute("DELETE FROM alert_since WHERE alert_id = ?", (alert_id,))
         self._db.commit()
 
+    async def retain(self, rule_ids: set[str]) -> None:
+        """Nach Hot-Reload: Alerts entfernter/deaktivierter Regeln verwerfen."""
+        gone = [rid for rid in self._active if rid not in rule_ids]
+        for rid in gone:
+            del self._active[rid]
+            self._db.execute("DELETE FROM alert_since WHERE alert_id = ?", (rid,))
+        if gone:
+            self._db.commit()
+            await self._changed()
+
     # --- Systemalerts (z. B. abgelehnte Regeln) ----------------------------
 
     async def set_system(

@@ -44,7 +44,7 @@ class ReadService:
     now: Now
     config_dir: Path
     max_backtest_days: int = 14
-    versions: VersionLister | None = None  # Versionierung kommt mit M10
+    versions: VersionLister | None = None
 
     # --- Suche ------------------------------------------------------------------
 

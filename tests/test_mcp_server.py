@@ -142,7 +142,8 @@ async def test_read_tools_resources_prompt_and_audit(
             assert tools == {
                 "search_entities", "get_state", "list_alerts", "list_rules", "search_rules",
                 "list_model_targets", "explain_rule", "simulate_rule", "backtest_rule",
-                "list_rule_versions",
+                "list_rule_versions", "create_rule", "update_rule", "set_rule_enabled",
+                "delete_rule", "rollback_rule", "acknowledge_alert", "set_entity_description",
             }  # fmt: skip
 
             async with asyncio.timeout(10):  # Katalog-Sync nach Engine-Start
@@ -185,7 +186,8 @@ async def test_read_tools_resources_prompt_and_audit(
             assert bt["rules"]["bt_act"]["fire_count"] == 1
             assert bt["rules"]["bt_act"]["fires"][0]["actions"][0]["service"] == "light.turn_on"
 
-            assert await _call(s, "list_rule_versions", rule_id="regen_alert") == []
+            versions = await _call(s, "list_rule_versions", rule_id="regen_alert")
+            assert [(v["version"], v["author"]) for v in versions] == [(1, "file")]
             assert (await _call(s, "list_model_targets"))["targets"] == []
 
             schema = await s.read_resource(AnyUrl("bridge://docs/rule-schema"))
