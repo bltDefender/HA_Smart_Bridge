@@ -75,7 +75,9 @@ class MqttAdapter:
         *,
         backoff: Backoff | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        on_connect: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
+        self._on_connect = on_connect
         self._factory, self._sink = factory, sink
         self._topics = list(topics)
         self._backoff = backoff or Backoff()
@@ -92,6 +94,8 @@ class MqttAdapter:
                         await client.subscribe(topic)
                     self._client, self.connected = client, True
                     self._backoff.reset()
+                    if self._on_connect is not None:
+                        await self._on_connect()
                     async for msg in client.messages:
                         await self._sink(
                             BridgeEvent(

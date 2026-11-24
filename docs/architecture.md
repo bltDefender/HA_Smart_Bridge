@@ -40,7 +40,7 @@ flowchart LR
 | `adapters` | HA-WS, MQTT | M2 |
 | `engine` | Conditions, `for`, `active`, Trigger-Index | M3 |
 | `scheduler` | time/cron/date/sun, Missed-Fire | M4 ✔ |
-| `alerts` | AlertStore, Discovery-Publisher | M5 |
+| `alerts` | AlertStore, Discovery-Publisher, Ziel-Handshake | M5 ✔ |
 | `executor` | MCP, WS, MQTT, Webhook | M6 |
 | `catalog` | Registry-Sync, Embeddings, Qdrant | M8 |
 | `mcp_server` | Claude-Schnittstelle | M9/M10 |
@@ -138,3 +138,11 @@ Paket `scheduler/`: `nextfire.py` (rein, berechnet den nächsten Feuerzeitpunkt)
 - **Werktage**: `workday` per `holidays` (`HOLIDAY_COUNTRY=DE`, `HOLIDAY_SUBDIV=BB`).
 - **Engine**: neu `on_time_trigger(rule_id, idx, at, data)` (führt Condition und Aktionen wie ein Event-Trigger aus) und `rules`.
 - **Nicht getestet**: Docker-Start, Lauf gegen echtes HA.
+
+## M5: AlertStore, MQTT-Discovery, `list_targets`
+
+Paket `alerts/`:
+- **AlertStore**: konsumiert `AlertActivated`/`AlertCleared`, baut Alerts aus der Regel (`title` → Regeltitel → ID). `since` wird in `alert_since` persistiert und bleibt über Neustarts erhalten; `reconcile()` verwirft nach dem Start Einträge ohne aktiven Alert. Sortierung deterministisch (Severity, `since`, ID), maximal 20. Snoozes (`snoozes`) blenden aus, bis sie ablaufen. Systemalerts (`error:<rule_id>`, Ziel `building.haus`) melden abgelehnte Regeln und nicht planbare Trigger. `GET /api/alerts`.
+- **AlertPublisher**: MQTT-Discovery für `sensor.haus3d_alerts` (retain, Availability über das LWT `smart_bridge/status`), State = Anzahl, Attribute `alerts` + `updated`. Discovery und Stand werden bei jeder (Wieder-)Verbindung neu gesendet (`MqttAdapter(on_connect=…)`); bei Offline-MQTT wird nicht geworfen.
+- **TargetCache**: sendet beim Start `haus3d_command {action: list_targets}`, cached `haus3d_targets` und warnt (Log) bei Regel-Zielen, die weder im Cache noch HA-Entities sind. Nie Abbruch. Ohne Antwort keine Prüfung.
+- **Nicht in M5**: Templates in `title`/`message` (M7), `repeat_after`, `haus3d_command` focus/clear, Snooze-Tool (M9/M10), Warnungen als Alert. Docker und echtes HA/Mosquitto ungetestet.

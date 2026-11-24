@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException, Response
 
 from .adapters.ha_ws import HaWebSocket
 from .adapters.mqtt import MqttAdapter, aiomqtt_factory
+from .alerts import AlertPublisher, AlertStore, TargetCache
 from .clock import utc_now
 from .engine import AsyncioTimers, Outcome, RuleEngine
 from .events import BridgeEvent
@@ -86,8 +87,10 @@ def app_factory() -> FastAPI:
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     store = StateStore(settings.data_dir / "bridge.db")
 
+    alerts: AlertStore
+
     async def outcome_sink(outcome: Outcome) -> None:
-        log.info("outcome %s", outcome)  # AlertStore (M5) und Executor (M6) folgen
+        await alerts.handle(outcome)  # Executor folgt mit M6
 
     timers = AsyncioTimers()
     sun = AstralSun(settings.latitude, settings.longitude, settings.zone)
@@ -101,8 +104,10 @@ def app_factory() -> FastAPI:
         is_workday=workday_provider(settings.holiday_country, settings.holiday_subdiv),
     )
     store.subscribe(engine.on_state_change)
-    for rule_id, problem in engine.load(_load_rules(settings.config_dir / "rules")).items():
-        log.error("rule %s rejected: %s", rule_id, problem)  # Fehler-Alert folgt mit M5
+    alerts = AlertStore(lambda: engine.rules, settings.data_dir / "bridge.db", utc_now)
+    load_errors = engine.load(_load_rules(settings.config_dir / "rules"))
+    for rule_id, problem in load_errors.items():
+        log.error("rule %s rejected: %s", rule_id, problem)
 
     fire_store = FireTimeStore(settings.data_dir / "bridge.db")
     scheduler = Scheduler(
@@ -116,8 +121,16 @@ def app_factory() -> FastAPI:
     )
     for rule_id, problem in scheduler.load(list(engine.rules.values())).errors.items():
         log.error("rule %s has unschedulable triggers: %s", rule_id, problem)
+        load_errors[rule_id] = problem
+
+    targets = TargetCache()
 
     async def sink(event: BridgeEvent) -> None:
+        if targets.on_event(event):
+            warnings = targets.validate(engine.rules.values(), lambda e: store.get(e) is not None)
+            for rule_id, warning in warnings.items():
+                log.warning("rule %s: %s", rule_id, warning)
+            return
         await engine.on_event(event)
 
     ha = (
@@ -125,11 +138,24 @@ def app_factory() -> FastAPI:
         if settings.ha_url and settings.ha_token
         else None
     )
-    mqtt = (
-        MqttAdapter(aiomqtt_factory(settings), sink, engine.index.mqtt_filters())
-        if settings.mqtt_host
-        else None
-    )
+    mqtt: MqttAdapter | None = None
+    publisher: AlertPublisher | None = None
+    if settings.mqtt_host:
+
+        async def mqtt_publish(topic: str, payload: str, retain: bool) -> None:
+            assert mqtt is not None
+            await mqtt.publish(topic, payload, retain)
+
+        publisher = AlertPublisher(alerts, mqtt_publish, settings.zone)
+        alerts.subscribe(publisher.publish_state)
+        mqtt = MqttAdapter(
+            aiomqtt_factory(settings),
+            sink,
+            engine.index.mqtt_filters(),
+            on_connect=publisher.on_connect,
+        )
+    if ha:
+        targets = TargetCache(ha.fire_event)
 
     def _check_sun_drift() -> None:
         """Warnung, wenn `sun.sun` in HA und die lokale astral-Berechnung auseinanderliegen."""
@@ -145,7 +171,10 @@ def app_factory() -> FastAPI:
         if ha:
             await ha.synced.wait()  # erst nach der Vollsynchronisation
         await engine.start()
+        await alerts.reconcile({r for r in engine.rules if engine.alert_state(r).active})
+        await alerts.replace_system(load_errors)
         await scheduler.start()
+        await targets.request()
         _check_sun_drift()
 
     checks: dict[str, Check] = {}
@@ -167,6 +196,7 @@ def app_factory() -> FastAPI:
             timers.cancel_all()
             scheduler.stop()
             fire_store.close()
+            alerts.close()
             store.close()
 
     app = create_app(settings, checks)
@@ -178,6 +208,10 @@ def app_factory() -> FastAPI:
             eid: {"state": st.state, "stale": st.stale, "last_changed": st.last_changed.isoformat()}
             for eid, st in store.all().items()
         }
+
+    @app.get("/api/alerts")
+    async def api_alerts() -> dict[str, Any]:
+        return {"alerts": [x.to_json(settings.zone) for x in alerts.alerts()]}
 
     @app.post("/api/webhooks/{webhook_id}", status_code=202)
     async def webhook(webhook_id: str) -> dict[str, str]:

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Self
@@ -82,3 +83,17 @@ async def test_publish_requires_connection() -> None:
 
 async def _noop(_: BridgeEvent) -> None:
     return None
+
+
+async def test_on_connect_runs_after_subscribe() -> None:
+    log: list[tuple[str, Any]] = []
+
+    async def hook() -> None:
+        log.append(("hook", None))
+        raise asyncio.CancelledError  # Stream blockiert sonst endlos
+
+    adapter = MqttAdapter(lambda: FakeClient([], False, log), _noop, ["a/#"], on_connect=hook)
+    with contextlib.suppress(asyncio.CancelledError):
+        await adapter.run()
+    kinds = [k for k, _ in log]
+    assert kinds.index("hook") > kinds.index("sub")
