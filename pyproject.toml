@@ -11,6 +11,9 @@ dependencies = [
     "uvicorn>=0.30",
     "aiohttp>=3.14.5",
     "aiomqtt>=2.5.1",
+    "astral>=3.2",
+    "croniter>=7.0.0",
+    "holidays>=0.109",
 ]
 
 [project.scripts]
@@ -25,6 +28,7 @@ dev = [
     "mypy>=1.10",
     "types-jsonschema",
     "aiohttp>=3.14.5",
+    "types-croniter>=6.2.4.20261122",
 ]
 
 [build-system]

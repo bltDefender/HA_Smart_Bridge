@@ -127,6 +127,10 @@ class RuleEngine:
             return "active.sun needs a sun provider"
         return None
 
+    @property
+    def rules(self) -> dict[str, Rule]:
+        return dict(self._rules)
+
     def alert_state(self, rule_id: str) -> RuleState:
         return self._state[rule_id]
 
@@ -143,6 +147,17 @@ class RuleEngine:
         for rule in self._rules.values():
             if has_level(rule):
                 await self._level(rule)
+
+    async def on_time_trigger(
+        self, rule_id: str, idx: int, at: datetime, data: dict[str, Any] | None = None
+    ) -> None:
+        """Vom Scheduler: ein Zeit-Trigger ist fällig."""
+        rule = self._rules.get(rule_id)
+        if not self._started or rule is None:
+            return
+        assert rule.triggers
+        info = TriggerInfo(rule.triggers[idx].type, at, index=idx, data=data or {})
+        await self._fire(rule, info)
 
     async def reevaluate(self, rule_id: str) -> None:
         """Für den Scheduler (M4): z. B. wenn ein `active`-Fenster beginnt oder endet."""

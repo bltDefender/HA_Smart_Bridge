@@ -367,6 +367,7 @@
     },
     "DateTrigger": {
       "additionalProperties": false,
+      "description": "Einmalig (`on: YYYY-MM-DD`), jährlich (`yearly`, `on: MM-DD`) oder Bereich (`from`/`to`).",
       "properties": {
         "catch_up": {
           "default": "none",
@@ -436,6 +437,12 @@
           ],
           "default": null,
           "title": "To"
+        },
+        "at": {
+          "default": "00:00",
+          "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+          "title": "At",
+          "type": "string"
         }
       },
       "required": [
