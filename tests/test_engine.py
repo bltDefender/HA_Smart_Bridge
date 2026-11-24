@@ -289,14 +289,10 @@ async def test_unsupported_rules_are_reported_and_not_loaded() -> None:
 rules:
   - id: tmpl
     alert: { target: t, severity: info }
-    condition: { template: { value_template: "{{ true }}" } }
+    condition: { template: { value_template: "{{ states(some_var) }}" } }
   - id: sun
     alert: { target: t, severity: info }
     condition: { sun: { after: sunset } }
-  - id: pe
-    per_entity: [a.b]
-    alert: { target: t, severity: info }
-    condition: { state: { entity_id: a.b, is: "on" } }
   - id: off
     enabled: false
     alert: { target: t, severity: info }
@@ -306,7 +302,7 @@ rules:
     condition: { workday: true }
 """
     h = await make(yaml)
-    assert set(h.errors) == {"tmpl", "sun", "pe"}
+    assert set(h.errors) == {"tmpl", "sun"}
     assert [o.rule_id for o in h.out] == ["ok"]
 
 

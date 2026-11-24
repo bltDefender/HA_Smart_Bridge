@@ -5,21 +5,24 @@ Semantik:
   Ohne `triggers` feuert jede Zustandsänderung einer Entity der Condition (abgeleitet).
 - Alert, `on_activate`, `on_clear` sind level-basiert: Übergänge des Zustands "Condition wahr
   (für `for`)". Dafür werden die Entities der Condition auch bei expliziten Triggern beobachtet.
-- Zeit-Trigger, `mode`, `debounce`, Rate-Limits und `repeat_after` gehören zu M4/M7.
+- `debounce` (trailing) und `max_runs_per_hour` gelten je Regel; `mode` setzt der Executor um.
+  `per_entity` wird beim Laden zu je einer Regel (`<id>__<entity>`) expandiert.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
+from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from ..clock import Now
 from ..events import BridgeEvent
+from ..rules import expand_per_entity
 from ..rules.models import (
     Action,
     Condition,
@@ -30,6 +33,7 @@ from ..rules.models import (
     StateTrigger,
 )
 from ..state import StateChange
+from ..templating import Templater, referenced_entities
 from ..timeutil import parse_duration
 from .conditions import (
     UNAVAILABLE,
@@ -64,6 +68,14 @@ class RuleState:
     pending: bool = False  # `for`-Timer läuft
 
 
+def _dynamic_template(cond: Condition, variables: dict[str, str]) -> bool:
+    """Template-Zugriff mit berechneter Entity → Trigger-Index kann sie nicht beobachten."""
+    if cond.template is not None:
+        return referenced_entities(cond.template.value_template, variables)[1]
+    kids = [*(cond.and_ or []), *(cond.or_ or []), *([cond.not_] if cond.not_ else [])]
+    return any(_dynamic_template(k, variables) for k in kids)
+
+
 def _default_workday(day: date) -> bool:
     return day.weekday() < 5
 
@@ -84,6 +96,9 @@ class RuleEngine:
         self._states, self._sink = states, sink
         self._now, self._timers, self._zone = now, timers, zone
         self._sun, self._is_workday, self._new_id = sun, is_workday, new_id
+        self.templater = Templater(states.get, now, zone)
+        self._history: dict[str, deque[datetime]] = {}
+        self.rate_limited: dict[str, int] = {}
         self._rules: dict[str, Rule] = {}
         self._state: dict[str, RuleState] = {}
         self._armed: dict[tuple[str, int, str], bool] = {}
@@ -101,26 +116,39 @@ class RuleEngine:
         self._timers.cancel_all()
         errors: dict[str, str] = {}
         loaded: list[Rule] = []
-        for rule in rules:
-            if not rule.enabled or rule.status in ("disabled", "error"):
-                continue
-            problem = self._unsupported(rule)
-            if problem:
-                errors[rule.id] = problem
-            else:
-                loaded.append(rule)
+        for parent in rules:
+            for rule in self._expand(parent, errors):
+                self._accept(rule, errors, loaded)
         self._rules = {r.id: r for r in loaded}
         self._state = {rid: self._state.get(rid, RuleState()) for rid in self._rules}
         for st in self._state.values():
             st.pending = False
         self._armed.clear()
+        self._history = {rid: h for rid, h in self._history.items() if rid in self._rules}
         self.index = build_index(loaded)
         return errors
 
+    @staticmethod
+    def _expand(rule: Rule, errors: dict[str, str]) -> list[Rule]:
+        try:
+            return expand_per_entity(rule)
+        except ValueError as exc:
+            errors[rule.id] = f"per_entity expansion failed: {exc}"
+            return []
+
+    def _accept(self, rule: Rule, errors: dict[str, str], loaded: list[Rule]) -> None:
+        if not rule.enabled or rule.status in ("disabled", "error"):
+            return
+        problem = self._unsupported(rule)
+        if problem:
+            errors[rule.id] = problem
+        else:
+            loaded.append(rule)
+
     def _unsupported(self, rule: Rule) -> str | None:
-        if rule.per_entity:
-            return "per_entity is not supported yet (needs templates, M7)"
         if rule.condition:
+            if _dynamic_template(rule.condition, rule.bindings):
+                return "template reads entities that cannot be determined statically"
             kinds = unsupported_kinds(rule.condition, self._sun is not None)
             if kinds:
                 return f"unsupported condition kinds: {sorted(kinds)}"
@@ -300,6 +328,8 @@ class RuleEngine:
             rule.on_unavailable,
             self._sun,
             self._is_workday,
+            self.templater,
+            rule.bindings,
         )
 
     def _gate(self, rule: Rule) -> TraceNode:
@@ -314,6 +344,19 @@ class RuleEngine:
         return TraceNode("rule", result, children=tuple(parts))
 
     async def _fire(self, rule: Rule, info: TriggerInfo) -> None:
+        if rule.debounce and info.type != "startup":
+            # Trailing-Debounce: jeder neue Trigger startet das Fenster neu, es zählt der letzte
+
+            async def settled() -> None:
+                await self._fire_now(rule, replace(info, at=self._now()))
+
+            self._timers.schedule(
+                ("debounce", rule.id), parse_duration(rule.debounce).total_seconds(), settled
+            )
+            return
+        await self._fire_now(rule, info)
+
+    async def _fire_now(self, rule: Rule, info: TriggerInfo) -> None:
         trace = self._gate(rule)
         if has_level(rule):
             await self._level(rule, trace)
@@ -328,6 +371,10 @@ class RuleEngine:
         info: TriggerInfo,
         trace: TraceNode,
     ) -> None:
+        if rule.max_runs_per_hour and phase != "on_clear" and not self._within_budget(rule):
+            self.rate_limited[rule.id] = self.rate_limited.get(rule.id, 0) + 1
+            log.warning("rule %s: max_runs_per_hour reached, %s dropped", rule.id, phase)
+            return
         await self._sink(
             ActionsRequested(
                 rule.id,
@@ -339,6 +386,17 @@ class RuleEngine:
                 shadow=rule.status == "shadow",
             )
         )
+
+    def _within_budget(self, rule: Rule) -> bool:
+        assert rule.max_runs_per_hour
+        now = self._now()
+        hist = self._history.setdefault(rule.id, deque())
+        while hist and now - hist[0] >= timedelta(hours=1):
+            hist.popleft()
+        if len(hist) >= rule.max_runs_per_hour:
+            return False
+        hist.append(now)
+        return True
 
     # --- Level-Zustand (Alert, on_activate, on_clear) --------------------
 

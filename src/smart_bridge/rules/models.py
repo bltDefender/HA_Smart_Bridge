@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import datetime
 import re
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from croniter import croniter
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, StringConstraints, model_validator
+
+from ..templating import check_syntax, referenced_entities
 
 Duration = Annotated[str, StringConstraints(pattern=r"^-?\d{1,2}:\d{2}:\d{2}$")]
 Clock = Annotated[str, StringConstraints(pattern=r"^\d{1,2}:\d{2}(:\d{2})?$")]
@@ -61,6 +64,11 @@ class NumericStateCond(_Strict):
 class TemplateCond(_Strict):
     value_template: str
 
+    @model_validator(mode="after")
+    def _syntax(self) -> TemplateCond:
+        check_syntax(self.value_template)
+        return self
+
 
 class SunWindow(_Strict):
     after: Literal["sunrise", "sunset"] | None = None
@@ -104,16 +112,18 @@ class Condition(_Strict):
                 raise ValueError("and/or must not be empty")
         return self
 
-    def entity_ids(self) -> set[str]:
+    def entity_ids(self, variables: Mapping[str, Any] | None = None) -> set[str]:
         ids: set[str] = set()
+        if self.template is not None:
+            ids |= referenced_entities(self.template.value_template, variables)[0]
         for cond in (self.state, self.numeric_state):
             if cond is not None:
                 ids.add(cond.entity_id)
         for group in (self.and_, self.or_):
             for child in group or []:
-                ids |= child.entity_ids()
+                ids |= child.entity_ids(variables)
         if self.not_ is not None:
-            ids |= self.not_.entity_ids()
+            ids |= self.not_.entity_ids(variables)
         return ids
 
 
@@ -421,6 +431,13 @@ class AlertSpec(_Strict):
     color: Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")] | None = None
     zoom: bool | None = None
 
+    @model_validator(mode="after")
+    def _templates(self) -> AlertSpec:
+        for text in (self.title, self.message):
+            if text:
+                check_syntax(text)
+        return self
+
 
 class Rule(_Strict):
     id: RuleId
@@ -447,6 +464,8 @@ class Rule(_Strict):
     tags: list[str] = Field(default_factory=list)
     enabled: bool = True
     status: Literal["active", "shadow", "disabled", "error"] = "active"
+    _bindings: dict[str, str] = PrivateAttr(default_factory=dict)
+    _parent: str | None = PrivateAttr(default=None)
     # `tier` wird bewusst nicht modelliert: berechnet, in YAML verboten (extra=forbid).
 
     @model_validator(mode="after")
@@ -457,7 +476,18 @@ class Rule(_Strict):
             raise ValueError("rule needs 'triggers' and/or 'condition'")
         if self.for_ and not self.condition:
             raise ValueError("'for' requires a condition")
+        if self.per_entity is not None and not self.per_entity:
+            raise ValueError("per_entity must not be empty")
         return self
+
+    @property
+    def bindings(self) -> dict[str, str]:
+        """Template-Variablen aus der `per_entity`-Expansion (`entity_id`)."""
+        return dict(self._bindings)
+
+    @property
+    def parent_id(self) -> str | None:
+        return self._parent
 
 
 class RulesFile(_Strict):

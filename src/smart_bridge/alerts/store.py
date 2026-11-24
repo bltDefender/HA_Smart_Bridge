@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -12,7 +13,9 @@ from typing import Any
 from ..clock import Now, utc_now
 from ..engine import AlertActivated, AlertCleared, Outcome
 from ..rules.models import Rule
+from ..templating import is_template
 
+log = logging.getLogger(__name__)
 MAX_ALERTS = 20
 _SEVERITY_ORDER = {"critical": 0, "warning": 1, "info": 2}
 SYSTEM_TARGET = "building.haus"
@@ -65,8 +68,9 @@ class AlertStore:
         rules: Callable[[], dict[str, Rule]],
         db_path: Path | str = ":memory:",
         now: Now = utc_now,
+        render: Callable[[str, dict[str, Any]], str] | None = None,
     ) -> None:
-        self._rules, self._now = rules, now
+        self._rules, self._now, self._render = rules, now, render
         self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.executescript(_SCHEMA)
         self._db.commit()
@@ -111,14 +115,24 @@ class AlertStore:
             id=rule.id,
             target=spec.target,
             severity=spec.severity,
-            title=spec.title or rule.title or rule.id,
-            message=spec.message or "",
+            title=self._text(spec.title or rule.title or rule.id, rule),
+            message=self._text(spec.message or "", rule),
             since=since,
             blink=spec.blink,
             color=spec.color,
             zoom=spec.zoom,
         )
         await self._changed()
+
+    def _text(self, text: str, rule: Rule) -> str:
+        """Templates in Titel/Nachricht; bei Fehler bleibt der Rohtext (Alert nie verlieren)."""
+        if self._render is None or not is_template(text):
+            return text
+        try:
+            return self._render(text, {**rule.bindings, "rule_id": rule.id})
+        except ValueError as exc:
+            log.warning("rule %s: alert template failed: %s", rule.id, exc)
+            return text
 
     async def reconcile(self, active_ids: set[str]) -> None:
         """Nach dem Start: persistierte `since`-Werte ohne aktiven Alert verwerfen."""
