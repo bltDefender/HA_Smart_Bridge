@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(docker compose:*)",
+      "Bash(bridge validate:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./secrets/**)",
+      "Read(./config/policy.yaml)",
+      "Edit(./config/policy.yaml)",
+      "Write(./config/policy.yaml)",
+      "Edit(./config/approvals/**)",
+      "Write(./config/approvals/**)"
+    ]
+  }
+}

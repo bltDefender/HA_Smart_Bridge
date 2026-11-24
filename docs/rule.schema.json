@@ -1,0 +1,1466 @@
+{
+  "$defs": {
+    "Action": {
+      "additionalProperties": true,
+      "description": "Typ wird in M1 geprüft, Parameter je Typ folgen mit dem Executor (M6).",
+      "properties": {
+        "type": {
+          "enum": [
+            "ha_tool",
+            "ha_service",
+            "mqtt_publish",
+            "webhook",
+            "notify",
+            "delay",
+            "wait_for",
+            "choose",
+            "if"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "timeout": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timeout"
+        },
+        "retries": {
+          "anyOf": [
+            {
+              "maximum": 10,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Retries"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Action",
+      "type": "object"
+    },
+    "ActiveWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        },
+        "weekdays": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weekdays"
+        },
+        "sun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SunWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ActiveWindow",
+      "type": "object"
+    },
+    "AlertSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "severity": {
+          "enum": [
+            "critical",
+            "warning",
+            "info"
+          ],
+          "title": "Severity",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Message"
+        },
+        "blink": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Blink"
+        },
+        "color": {
+          "anyOf": [
+            {
+              "pattern": "^#[0-9a-fA-F]{6}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Color"
+        },
+        "zoom": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zoom"
+        }
+      },
+      "required": [
+        "target",
+        "severity"
+      ],
+      "title": "AlertSpec",
+      "type": "object"
+    },
+    "Condition": {
+      "additionalProperties": false,
+      "description": "Genau ein Schlüssel ist gesetzt (wie bei HA).",
+      "properties": {
+        "state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StateCond"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "numeric_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NumericStateCond"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TemplateCond"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "time": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TimeCond"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sun": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SunWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "workday": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Workday"
+        },
+        "and": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "And"
+        },
+        "or": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Condition"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Or"
+        },
+        "not": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "Condition",
+      "type": "object"
+    },
+    "CronTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "cron",
+          "title": "Type",
+          "type": "string"
+        },
+        "expression": {
+          "title": "Expression",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "expression"
+      ],
+      "title": "CronTrigger",
+      "type": "object"
+    },
+    "DateTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "date",
+          "title": "Type",
+          "type": "string"
+        },
+        "on": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On"
+        },
+        "yearly": {
+          "default": false,
+          "title": "Yearly",
+          "type": "boolean"
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "From"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "DateTrigger",
+      "type": "object"
+    },
+    "EventTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "event",
+          "title": "Type",
+          "type": "string"
+        },
+        "event_type": {
+          "title": "Event Type",
+          "type": "string"
+        },
+        "event_data": {
+          "additionalProperties": true,
+          "title": "Event Data",
+          "type": "object"
+        }
+      },
+      "required": [
+        "type",
+        "event_type"
+      ],
+      "title": "EventTrigger",
+      "type": "object"
+    },
+    "IntervalTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "interval",
+          "title": "Type",
+          "type": "string"
+        },
+        "every": {
+          "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+          "title": "Every",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "every"
+      ],
+      "title": "IntervalTrigger",
+      "type": "object"
+    },
+    "MqttTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "mqtt",
+          "title": "Type",
+          "type": "string"
+        },
+        "topic": {
+          "title": "Topic",
+          "type": "string"
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Payload"
+        }
+      },
+      "required": [
+        "type",
+        "topic"
+      ],
+      "title": "MqttTrigger",
+      "type": "object"
+    },
+    "NumericStateCond": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "above": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Above"
+        },
+        "below": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Below"
+        },
+        "hysteresis": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hysteresis"
+        }
+      },
+      "required": [
+        "entity_id"
+      ],
+      "title": "NumericStateCond",
+      "type": "object"
+    },
+    "NumericStateTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "numeric_state",
+          "title": "Type",
+          "type": "string"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "above": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Above"
+        },
+        "below": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Below"
+        },
+        "hysteresis": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hysteresis"
+        },
+        "for": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "For"
+        }
+      },
+      "required": [
+        "type",
+        "entity_id"
+      ],
+      "title": "NumericStateTrigger",
+      "type": "object"
+    },
+    "Rule": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[a-z0-9_]+$",
+          "title": "Id",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "triggers": {
+          "anyOf": [
+            {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "cron": "#/$defs/CronTrigger",
+                    "date": "#/$defs/DateTrigger",
+                    "event": "#/$defs/EventTrigger",
+                    "interval": "#/$defs/IntervalTrigger",
+                    "mqtt": "#/$defs/MqttTrigger",
+                    "numeric_state": "#/$defs/NumericStateTrigger",
+                    "startup": "#/$defs/StartupTrigger",
+                    "state": "#/$defs/StateTrigger",
+                    "sun": "#/$defs/SunTrigger",
+                    "time": "#/$defs/TimeTrigger",
+                    "time_pattern": "#/$defs/TimePatternTrigger",
+                    "webhook": "#/$defs/WebhookTrigger"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/StateTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/NumericStateTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/EventTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/MqttTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/WebhookTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/StartupTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/TimeTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/TimePatternTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/CronTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/IntervalTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/DateTrigger"
+                  },
+                  {
+                    "$ref": "#/$defs/SunTrigger"
+                  }
+                ]
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Triggers"
+        },
+        "condition": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Condition"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "for": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "For"
+        },
+        "active": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActiveWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "per_entity": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Per Entity"
+        },
+        "mode": {
+          "default": "single",
+          "enum": [
+            "single",
+            "restart",
+            "queued",
+            "parallel"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "alert": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AlertSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "actions": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Action"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actions"
+        },
+        "on_activate": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Action"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Activate"
+        },
+        "on_clear": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Action"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "On Clear"
+        },
+        "repeat_after": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repeat After"
+        },
+        "on_unavailable": {
+          "default": "ignore",
+          "enum": [
+            "ignore",
+            "deviation"
+          ],
+          "title": "On Unavailable",
+          "type": "string"
+        },
+        "debounce": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Debounce"
+        },
+        "max_runs_per_hour": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max Runs Per Hour"
+        },
+        "dry_run": {
+          "default": false,
+          "title": "Dry Run",
+          "type": "boolean"
+        },
+        "created_by": {
+          "default": "manual",
+          "enum": [
+            "claude",
+            "manual",
+            "file"
+          ],
+          "title": "Created By",
+          "type": "string"
+        },
+        "version": {
+          "default": 1,
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "locked": {
+          "default": false,
+          "title": "Locked",
+          "type": "boolean"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "enabled": {
+          "default": true,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "status": {
+          "default": "active",
+          "enum": [
+            "active",
+            "shadow",
+            "disabled",
+            "error"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "Rule",
+      "type": "object"
+    },
+    "StartupTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "startup",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "StartupTrigger",
+      "type": "object"
+    },
+    "StateCond": {
+      "additionalProperties": false,
+      "properties": {
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "is": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          ],
+          "title": "Is"
+        }
+      },
+      "required": [
+        "entity_id",
+        "is"
+      ],
+      "title": "StateCond",
+      "type": "object"
+    },
+    "StateTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "state",
+          "title": "Type",
+          "type": "string"
+        },
+        "entity_id": {
+          "title": "Entity Id",
+          "type": "string"
+        },
+        "from": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "From"
+        },
+        "to": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "To"
+        },
+        "for": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "For"
+        }
+      },
+      "required": [
+        "type",
+        "entity_id"
+      ],
+      "title": "StateTrigger",
+      "type": "object"
+    },
+    "SunTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "sun",
+          "title": "Type",
+          "type": "string"
+        },
+        "event": {
+          "enum": [
+            "sunrise",
+            "sunset",
+            "civil_dawn",
+            "civil_dusk",
+            "nautical_dawn",
+            "nautical_dusk",
+            "astronomical_dawn",
+            "astronomical_dusk"
+          ],
+          "title": "Event",
+          "type": "string"
+        },
+        "offset": {
+          "default": "00:00:00",
+          "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+          "title": "Offset",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "event"
+      ],
+      "title": "SunTrigger",
+      "type": "object"
+    },
+    "SunWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "enum": [
+                "sunrise",
+                "sunset"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "enum": [
+                "sunrise",
+                "sunset"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        },
+        "after_offset": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After Offset"
+        },
+        "before_offset": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before Offset"
+        }
+      },
+      "title": "SunWindow",
+      "type": "object"
+    },
+    "TemplateCond": {
+      "additionalProperties": false,
+      "properties": {
+        "value_template": {
+          "title": "Value Template",
+          "type": "string"
+        }
+      },
+      "required": [
+        "value_template"
+      ],
+      "title": "TemplateCond",
+      "type": "object"
+    },
+    "TimeCond": {
+      "additionalProperties": false,
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "After"
+        },
+        "before": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Before"
+        },
+        "weekdays": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weekdays"
+        }
+      },
+      "title": "TimeCond",
+      "type": "object"
+    },
+    "TimePatternTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "time_pattern",
+          "title": "Type",
+          "type": "string"
+        },
+        "hours": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Hours"
+        },
+        "minutes": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minutes"
+        },
+        "seconds": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Seconds"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "TimePatternTrigger",
+      "type": "object"
+    },
+    "TimeTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "catch_up": {
+          "default": "none",
+          "enum": [
+            "none",
+            "once",
+            "within"
+          ],
+          "title": "Catch Up",
+          "type": "string"
+        },
+        "catch_up_within": {
+          "anyOf": [
+            {
+              "pattern": "^-?\\d{1,2}:\\d{2}:\\d{2}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Catch Up Within"
+        },
+        "type": {
+          "const": "time",
+          "title": "Type",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{1,2}:\\d{2}(:\\d{2})?$",
+          "title": "At",
+          "type": "string"
+        },
+        "weekdays": {
+          "anyOf": [
+            {
+              "items": {
+                "enum": [
+                  "mon",
+                  "tue",
+                  "wed",
+                  "thu",
+                  "fri",
+                  "sat",
+                  "sun"
+                ],
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Weekdays"
+        }
+      },
+      "required": [
+        "type",
+        "at"
+      ],
+      "title": "TimeTrigger",
+      "type": "object"
+    },
+    "WebhookTrigger": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "webhook",
+          "title": "Type",
+          "type": "string"
+        },
+        "webhook_id": {
+          "title": "Webhook Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "webhook_id"
+      ],
+      "title": "WebhookTrigger",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "rules": {
+      "items": {
+        "$ref": "#/$defs/Rule"
+      },
+      "title": "Rules",
+      "type": "array"
+    }
+  },
+  "required": [
+    "rules"
+  ],
+  "title": "smart-bridge rules file",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}
