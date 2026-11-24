@@ -16,6 +16,15 @@ from fastapi import FastAPI, HTTPException, Response
 from .adapters.ha_ws import HaWebSocket
 from .adapters.mqtt import MqttAdapter, aiomqtt_factory
 from .alerts import AlertPublisher, AlertStore, TargetCache
+from .catalog import (
+    REGISTRY_EVENTS,
+    Catalog,
+    CatalogConfig,
+    Descriptions,
+    VectorIndex,
+    fetch_registry,
+    make_embedder,
+)
 from .clock import utc_now
 from .engine import AsyncioTimers, Outcome, RuleEngine
 from .engine.outcomes import ActionsRequested
@@ -28,6 +37,7 @@ from .executor import (
     WsBackend,
     check_tools,
 )
+from .history import StateHistory
 from .rules import Rule, duplicate_ids, load_dir
 from .scheduler import AstralSun, FireTimeStore, Scheduler, workday_provider
 from .scheduler.sun import sun_drift
@@ -75,7 +85,7 @@ def create_app(settings: Settings | None = None, checks: dict[str, Check] | None
     return app
 
 
-def _load_rules(directory: Path) -> list[Rule]:
+def _load_rules(directory: Path, hashes: dict[str, str] | None = None) -> list[Rule]:
     results = load_dir(directory) if directory.is_dir() else []
     for err in duplicate_ids(results):
         log.error(err)
@@ -87,6 +97,8 @@ def _load_rules(directory: Path) -> list[Rule]:
         for rule in res.rules:
             if rule.id not in seen:
                 seen.add(rule.id)
+                if hashes is not None:
+                    hashes[rule.id] = res.file_hash
                 rules.append(rule)
     return rules
 
@@ -125,7 +137,8 @@ def app_factory() -> FastAPI:
     alerts = AlertStore(
         lambda: engine.rules, settings.data_dir / "bridge.db", utc_now, engine.templater.render
     )
-    load_errors = engine.load(_load_rules(settings.config_dir / "rules"))
+    file_hashes: dict[str, str] = {}
+    load_errors = engine.load(_load_rules(settings.config_dir / "rules", file_hashes))
     for rule_id, problem in load_errors.items():
         log.error("rule %s rejected: %s", rule_id, problem)
 
@@ -145,8 +158,14 @@ def app_factory() -> FastAPI:
 
     targets = TargetCache()
 
+    catalog: Catalog | None = None
+
     async def sink(event: BridgeEvent) -> None:
+        if catalog is not None and event.type in REGISTRY_EVENTS:
+            catalog.request_sync()
         if targets.on_event(event):
+            if catalog is not None:
+                catalog.request_sync()
             warnings = targets.validate(engine.rules.values(), lambda e: store.get(e) is not None)
             for rule_id, warning in warnings.items():
                 log.warning("rule %s: %s", rule_id, warning)
@@ -176,6 +195,29 @@ def app_factory() -> FastAPI:
         )
     if ha:
         targets = TargetCache(ha.fire_event)
+
+    if settings.qdrant_url:
+        from qdrant_client import AsyncQdrantClient
+
+        qdrant = AsyncQdrantClient(location=settings.qdrant_url)
+        cache = settings.embed_cache_dir or settings.data_dir / "embed-cache"
+        catalog = Catalog(
+            VectorIndex(qdrant, make_embedder(settings.embed_model, cache)),
+            store,
+            lambda: engine.rules,
+            lambda: targets,
+            registry=(lambda: fetch_registry(ha.command)) if ha else None,
+            config=CatalogConfig.load(settings.config_dir / "catalog.yaml"),
+            descriptions=Descriptions(settings.config_dir / "descriptions"),
+            file_hashes=lambda: file_hashes,
+        )
+
+    history = StateHistory(
+        settings.data_dir / "bridge.db",
+        lambda e: e in engine.index.entity or (catalog is not None and e in catalog.selected),
+        settings.state_history_days,
+    )
+    store.subscribe(history.on_change)
 
     def friendly_name(entity_id: str) -> str | None:
         state = store.get(entity_id)
@@ -241,6 +283,8 @@ def app_factory() -> FastAPI:
         await alerts.replace_system(load_errors)
         await scheduler.start()
         await targets.request()
+        if catalog is not None:
+            catalog.request_sync()
         _check_sun_drift()
 
     checks: dict[str, Check] = {}
@@ -251,10 +295,15 @@ def app_factory() -> FastAPI:
     if mcp_backend:
         checks["ha_mcp"] = _flag_check(lambda: mcp_backend.available)
 
+    if catalog is not None:
+        checks["qdrant"] = catalog.check
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks = [asyncio.create_task(a.run()) for a in (ha, mqtt) if a is not None]
         tasks.append(asyncio.create_task(start_engine()))
+        if catalog is not None:
+            tasks.append(asyncio.create_task(catalog.run()))
         try:
             yield
         finally:
@@ -265,6 +314,7 @@ def app_factory() -> FastAPI:
                 t.cancel()
             await asyncio.gather(*run_tasks, return_exceptions=True)
             run_store.close()
+            history.close()
             timers.cancel_all()
             scheduler.stop()
             fire_store.close()

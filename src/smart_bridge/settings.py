@@ -33,6 +33,8 @@ class Settings:
     mqtt_password: str | None = None
     qdrant_url: str | None = None
     embed_model: str = "intfloat/multilingual-e5-small"
+    embed_cache_dir: Path | None = None
+    state_history_days: int = 14
     mcp_server_enabled: bool = False
     mcp_server_token: str | None = None
     latitude: float = 52.4
@@ -68,6 +70,8 @@ class Settings:
             mqtt_password=_secret(e, "MQTT_PASSWORD"),
             qdrant_url=e.get("QDRANT_URL") or None,
             embed_model=e.get("EMBED_MODEL", "intfloat/multilingual-e5-small"),
+            embed_cache_dir=Path(e["EMBED_CACHE_DIR"]) if e.get("EMBED_CACHE_DIR") else None,
+            state_history_days=int(e.get("STATE_HISTORY_DAYS", "14")),
             mcp_server_enabled=_bool(e.get("MCP_SERVER_ENABLED"), False),
             mcp_server_token=_secret(e, "MCP_SERVER_TOKEN"),
             latitude=float(e.get("LATITUDE", "52.4")),

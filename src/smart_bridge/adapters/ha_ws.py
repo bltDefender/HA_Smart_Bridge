@@ -179,6 +179,10 @@ class HaWebSocket:
 
     # --- Ausgehend ------------------------------------------------------
 
+    async def command(self, payload: dict[str, Any]) -> Any:
+        """Beliebiges WS-Kommando (z. B. Registry-Abfragen)."""
+        return await self._command(payload)
+
     async def call_service(
         self,
         domain: str,

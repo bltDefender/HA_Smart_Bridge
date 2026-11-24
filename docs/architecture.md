@@ -43,7 +43,7 @@ flowchart LR
 | `alerts` | AlertStore, Discovery-Publisher, Ziel-Handshake | M5 ✔ |
 | `executor` | MCP, WS, MQTT, Webhook, `rule_runs` | M6 ✔ |
 | `mock_ha` | Mock-HA (WS + MCP) für Dev/Tests | M6 ✔ |
-| `catalog` | Registry-Sync, Embeddings, Qdrant | M8 |
+| `catalog` | Registry-Sync, Embeddings, Qdrant, `state_history` | M8 ✔ |
 | `mcp_server` | Claude-Schnittstelle | M9/M10 |
 | `graph`, `ui_api` | RuleGraph, `/ui` | M11 |
 
@@ -170,3 +170,16 @@ Paket `executor/` (Engine → `ActionsRequested` → Hintergrund-Task je Lauf, d
 - **`mode`** im `ActionExecutor`, je Regel: `single` / `restart` / `queued` / `parallel`. Übersprungene und abgebrochene Läufe erscheinen in `rule_runs` (`skipped`, `cancelled`).
 - **Debounce und Budget** in der Engine: `debounce` ersetzt den wartenden Trigger (Timer `("debounce", rule_id)`), `max_runs_per_hour` zählt gleitend je Regel; `engine.rate_limited` zählt verworfene Läufe.
 - **Nicht in M7**: `repeat_after`, Templates in `alert.target`/Entity-IDs (nur `{{ entity_id }}` statisch), Rate-Limit-Hinweis als Alert, Circuit-Breaker (M10). Docker und echtes HA ungetestet.
+
+## M8: Katalog und `state_history`
+
+- **Katalog** (`catalog/`): reine Lesehilfe; Engine, Executor und Alerts hängen nie davon ab. Qdrant-/Embedding-Fehler setzen nur `available=False`, `/readyz` meldet `qdrant: degraded` (kein 503), Suchen werfen `CatalogUnavailableError`.
+- **Collections** `entities` und `rules` (Cosine; bei anderer Modell-Dimension automatisch neu aufgebaut). Point-ID = uuid5 des Schlüssels. `VectorIndex.sync` vergleicht `description_hash` und bettet nur Geänderte neu ein, Verwaiste werden gelöscht.
+- **Entity-Dokument**: deterministischer deutscher Text aus Registry (Entity, Device, Area), State-Attributen und Modell-Ziel aus `haus3d_targets`. Payload: `entity_id`, `domain`, `area`, `device_id`, `device_class`, `model_target`, `description_hash`, `source` (`generated` | `curated`).
+- **Rule-Dokument**: Titel, `intent`, Trigger/Bedingung/Ziel/Aktionen in Klartext; Payload `rule_id`, `entity_ids[]`, `target`, `severity`, `file_hash`.
+- **Auswahl**: Standard = Entities aus Regeln, Zielen und Aktionen; `config/catalog.yaml` ergänzt `allowlist` (Globs), `areas`, `labels`, `exclude`, `domains`.
+- **Kuratierte Texte**: `config/descriptions/*.yaml` (`descriptions: {entity_id: text}`) überschreiben generierte; `Catalog.set_description` schreibt `mcp.yaml` (für M9/M10).
+- **Sync**: Vollindex nach Engine-Start; danach debounced über `entity|device|area_registry_updated`, `haus3d_targets` und Regel-Reload. Registry über WS (`config/*_registry/list`, `HaWebSocket.command`).
+- **Embeddings** (`catalog/embedder.py`): `fastembed` lokal mit `passage:`/`query:`-Präfix. `multilingual-e5-small` ist in fastembed nicht vordefiniert und wird per `add_custom_model` registriert. `EMBED_MODEL=hash` nutzt einen deterministischen Hash-Embedder (Dev/Tests, kein Download). `QDRANT_URL=:memory:` nutzt Qdrants lokalen Modus.
+- **`state_history`** (`history.py`): SQLite, nur Entities im Trigger-Index oder Katalog; Retention `STATE_HISTORY_DAYS` (Standard 14), stündliches Prune; `changes()` liefert Anfangszustand + Wechsel als Grundlage für Backtests (M9).
+- **Nicht in M8**: Collection `alert_history`, Inkrement pro Einzel-Entity (aktuell Vollabgleich mit Hash-Vergleich). Ungetestet: Docker, echtes Qdrant/HA und der Modell-Download von `multilingual-e5-small` (ONNX-Pfad `onnx/model.onnx` angenommen).

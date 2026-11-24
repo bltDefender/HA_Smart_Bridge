@@ -32,6 +32,17 @@ class MockHa:
         self.calls: list[tuple[str, dict[str, Any]]] = []  # ("service"|"tool"|"event", payload)
         self._subs: list[tuple[WebSocket, int, str | None]] = []
         self.fail_services = False
+        self.registry: dict[str, list[dict[str, Any]]] = {
+            "entity_registry": [
+                {"entity_id": eid, "device_id": "dev_" + eid.split(".")[1], "area_id": None}
+                for eid in self.entities
+            ],
+            "device_registry": [
+                {"id": "dev_" + eid.split(".")[1], "name": eid.split(".")[1], "area_id": "flur"}
+                for eid in self.entities
+            ],
+            "area_registry": [{"area_id": "flur", "name": "Flur"}],
+        }
 
     def _now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -184,6 +195,12 @@ async def _handle(ha: MockHa, ws: WebSocket, msg: dict[str, Any]) -> None:
         ha.calls.append(("event", {"type": msg["event_type"], "data": msg.get("event_data")}))
         await ha.emit(msg["event_type"], msg.get("event_data") or {})
         await ok()
+    elif kind in (
+        "config/entity_registry/list",
+        "config/device_registry/list",
+        "config/area_registry/list",
+    ):
+        await ok(ha.registry[kind.split("/")[1]])
     elif kind == "ping":
         await ws.send_json({"id": mid, "type": "pong"})
     else:
