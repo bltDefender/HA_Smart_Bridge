@@ -200,3 +200,8 @@ Komponenten: `policy.py` (Stufen), `authoring/pipeline.py` (Validierung), `autho
 Tabellen: `approval_tokens` (Einmal-Nonces), `rule_trips` (Circuit-Breaker), `audit_log` (mit Diff).
 
 Grenzen: Beim Start laufen weder Entity-Prüfung noch Backtest (HA noch nicht synchronisiert); Zyklen nur ab 2 Regeln; entfernte MQTT-Topics bleiben bis zum Reconnect abonniert. Docker, echtes HA und der HA-Button-Flow sind ungetestet.
+
+## M11 – RuleGraph und UI-API
+`ui/graph.py` (reiner Builder), `ui/text.py` (Klartext), `ui/routes.py` (Router, SSE). Details in `docs/ui-api.md`. Der Router bekommt nur einen `UiReader` mit Lese-Callables; er importiert weder Executor, MCP, Approvals, Authoring noch Adapter (per Test erzwungen).
+
+Grenzen: keine statischen Assets und kein CSP `frame-ancestors` (M12); SSE pollt Snapshots im Sekundentakt; Heatmap in UTC-Tagen. Browser/EventSource, Docker und echtes HA ungetestet.
