@@ -167,6 +167,10 @@ class RuleEngine:
             raise KeyError(rule_id)
         return evaluate(cond, self._ctx(rule)).result
 
+    def explain(self, rule_id: str) -> TraceNode:
+        """Aktuelle Auswertung (`active` + Condition) mit Ergebnis je Knoten; ohne Seiteneffekte."""
+        return self._gate(self._rules[rule_id])
+
     def alert_state(self, rule_id: str) -> RuleState:
         return self._state[rule_id]
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Response
 from .adapters.ha_ws import HaWebSocket
 from .adapters.mqtt import MqttAdapter, aiomqtt_factory
 from .alerts import AlertPublisher, AlertStore, TargetCache
+from .audit import AuditLog
 from .catalog import (
     REGISTRY_EVENTS,
     Catalog,
@@ -38,10 +39,12 @@ from .executor import (
     check_tools,
 )
 from .history import StateHistory
+from .mcp_server import ReadService, build_mcp, guarded_route
 from .rules import Rule, duplicate_ids, load_dir
 from .scheduler import AstralSun, FireTimeStore, Scheduler, workday_provider
 from .scheduler.sun import sun_drift
 from .settings import Settings
+from .simulate import Env
 from .state import StateStore
 
 log = logging.getLogger(__name__)
@@ -219,6 +222,29 @@ def app_factory() -> FastAPI:
     )
     store.subscribe(history.on_change)
 
+    audit = AuditLog(settings.data_dir / "bridge.db", utc_now)
+    mcp_server = None
+    if settings.mcp_server_enabled:
+        if not settings.mcp_server_token:
+            raise RuntimeError("MCP_SERVER_ENABLED requires MCP_SERVER_TOKEN")
+        read_service = ReadService(
+            engine,
+            store,
+            alerts,
+            lambda: targets,
+            history,
+            catalog,
+            Env(
+                settings.zone,
+                sun,
+                workday_provider(settings.holiday_country, settings.holiday_subdiv),
+            ),
+            utc_now,
+            settings.config_dir,
+            settings.state_history_days,
+        )
+        mcp_server = build_mcp(read_service, audit)
+
     def friendly_name(entity_id: str) -> str | None:
         state = store.get(entity_id)
         name = state.attributes.get("friendly_name") if state else None
@@ -305,7 +331,10 @@ def app_factory() -> FastAPI:
         if catalog is not None:
             tasks.append(asyncio.create_task(catalog.run()))
         try:
-            yield
+            async with AsyncExitStack() as stack:
+                if mcp_server is not None:
+                    await stack.enter_async_context(mcp_server.session_manager.run())
+                yield
         finally:
             for t in tasks:
                 t.cancel()
@@ -315,6 +344,7 @@ def app_factory() -> FastAPI:
             await asyncio.gather(*run_tasks, return_exceptions=True)
             run_store.close()
             history.close()
+            audit.close()
             timers.cancel_all()
             scheduler.stop()
             fire_store.close()
@@ -323,6 +353,8 @@ def app_factory() -> FastAPI:
 
     app = create_app(settings, checks)
     app.router.lifespan_context = lifespan
+    if mcp_server is not None and settings.mcp_server_token:
+        app.router.routes.append(guarded_route(mcp_server, settings.mcp_server_token))
 
     @app.get("/api/state")
     async def api_state() -> dict[str, Any]:
