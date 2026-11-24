@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Response
 
 from .adapters.ha_ws import HaWebSocket
@@ -17,7 +18,16 @@ from .adapters.mqtt import MqttAdapter, aiomqtt_factory
 from .alerts import AlertPublisher, AlertStore, TargetCache
 from .clock import utc_now
 from .engine import AsyncioTimers, Outcome, RuleEngine
+from .engine.outcomes import ActionsRequested
 from .events import BridgeEvent
+from .executor import (
+    ActionExecutor,
+    Dispatcher,
+    McpBackend,
+    RunStore,
+    WsBackend,
+    check_tools,
+)
 from .rules import Rule, duplicate_ids, load_dir
 from .scheduler import AstralSun, FireTimeStore, Scheduler, workday_provider
 from .scheduler.sun import sun_drift
@@ -89,8 +99,16 @@ def app_factory() -> FastAPI:
 
     alerts: AlertStore
 
+    run_tasks: set[asyncio.Task[Any]] = set()
+
     async def outcome_sink(outcome: Outcome) -> None:
-        await alerts.handle(outcome)  # Executor folgt mit M6
+        if isinstance(outcome, ActionsRequested):
+            # Aktionen laufen entkoppelt, damit Delays/wait_for die Engine nicht blockieren
+            task = asyncio.create_task(executor.run(outcome))
+            run_tasks.add(task)
+            task.add_done_callback(run_tasks.discard)
+            return
+        await alerts.handle(outcome)
 
     timers = AsyncioTimers()
     sun = AstralSun(settings.latitude, settings.longitude, settings.zone)
@@ -157,6 +175,50 @@ def app_factory() -> FastAPI:
     if ha:
         targets = TargetCache(ha.fire_event)
 
+    def friendly_name(entity_id: str) -> str | None:
+        state = store.get(entity_id)
+        name = state.attributes.get("friendly_name") if state else None
+        return name if isinstance(name, str) else None
+
+    mcp_backend = (
+        McpBackend(settings.ha_mcp_url, settings.ha_token, friendly_name)
+        if settings.ha_mcp_url
+        else None
+    )
+    run_store = RunStore(settings.data_dir / "bridge.db")
+
+    async def http_request(method: str, url: str, headers: dict[str, str], body: Any) -> int:
+        async with httpx.AsyncClient(timeout=30) as client:
+            kwargs = {"json": body} if not isinstance(body, str | None) else {"content": body}
+            return (await client.request(method, url, headers=headers, **kwargs)).status_code
+
+    executor = ActionExecutor(
+        Dispatcher(settings.executor, mcp_backend, WsBackend(ha) if ha else None),
+        run_store,
+        lambda: engine.rules,
+        engine.eval_condition,
+        mqtt_publish=mqtt.publish if mqtt else None,
+        http=http_request,
+        dry_run=settings.dry_run,
+    )
+
+    async def on_state(change: Any) -> None:
+        executor.notify_state_changed()
+
+    store.subscribe(on_state)
+
+    async def discover_tools() -> None:
+        if mcp_backend is None:
+            return
+        try:
+            tools = await mcp_backend.discover()
+        except Exception as exc:  # MCP-Ausfall verhindert den Start nicht; Fallback WS
+            log.warning("HA MCP tool discovery failed: %s", exc)
+            return
+        for rule_id, problem in check_tools(list(engine.rules.values()), tools).items():
+            log.error("rule %s: %s", rule_id, problem)
+            load_errors[rule_id] = problem
+
     def _check_sun_drift() -> None:
         """Warnung, wenn `sun.sun` in HA und die lokale astral-Berechnung auseinanderliegen."""
         state = store.get("sun.sun")
@@ -170,6 +232,7 @@ def app_factory() -> FastAPI:
     async def start_engine() -> None:
         if ha:
             await ha.synced.wait()  # erst nach der Vollsynchronisation
+        await discover_tools()
         await engine.start()
         await alerts.reconcile({r for r in engine.rules if engine.alert_state(r).active})
         await alerts.replace_system(load_errors)
@@ -182,6 +245,8 @@ def app_factory() -> FastAPI:
         checks["ha"] = _flag_check(lambda: ha.synced.is_set())
     if mqtt:
         checks["mqtt"] = _flag_check(lambda: mqtt.connected)
+    if mcp_backend:
+        checks["ha_mcp"] = _flag_check(lambda: mcp_backend.available)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -193,6 +258,10 @@ def app_factory() -> FastAPI:
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            for t in list(run_tasks):
+                t.cancel()
+            await asyncio.gather(*run_tasks, return_exceptions=True)
+            run_store.close()
             timers.cancel_all()
             scheduler.stop()
             fire_store.close()
@@ -212,6 +281,26 @@ def app_factory() -> FastAPI:
     @app.get("/api/alerts")
     async def api_alerts() -> dict[str, Any]:
         return {"alerts": [x.to_json(settings.zone) for x in alerts.alerts()]}
+
+    @app.get("/api/pause")
+    async def api_pause_state() -> dict[str, bool]:
+        return {"paused": executor.paused}
+
+    @app.post("/api/pause")
+    async def api_pause() -> dict[str, bool]:
+        executor.set_paused(True)
+        log.warning("kill switch: actions paused")
+        return {"paused": True}
+
+    @app.post("/api/resume")
+    async def api_resume() -> dict[str, bool]:
+        executor.set_paused(False)
+        log.warning("kill switch released: actions resumed")
+        return {"paused": False}
+
+    @app.get("/api/runs")
+    async def api_runs(rule_id: str | None = None, limit: int = 20) -> dict[str, Any]:
+        return {"runs": run_store.recent(rule_id, min(max(limit, 1), 200))}
 
     @app.post("/api/webhooks/{webhook_id}", status_code=202)
     async def webhook(webhook_id: str) -> dict[str, str]:

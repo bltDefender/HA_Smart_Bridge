@@ -22,6 +22,7 @@ from ..clock import Now
 from ..events import BridgeEvent
 from ..rules.models import (
     Action,
+    Condition,
     EventTrigger,
     MqttTrigger,
     NumericStateTrigger,
@@ -130,6 +131,13 @@ class RuleEngine:
     @property
     def rules(self) -> dict[str, Rule]:
         return dict(self._rules)
+
+    def eval_condition(self, rule_id: str, cond: Condition) -> bool | None:
+        """Condition im Kontext einer Regel auswerten (für `if`/`choose`/`wait_for`)."""
+        rule = self._rules.get(rule_id)
+        if rule is None:
+            raise KeyError(rule_id)
+        return evaluate(cond, self._ctx(rule)).result
 
     def alert_state(self, rule_id: str) -> RuleState:
         return self._state[rule_id]

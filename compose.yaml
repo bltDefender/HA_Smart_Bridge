@@ -19,7 +19,14 @@ services:
       - ./data/qdrant:/qdrant/storage
     expose: ["6333"]
 
-  # Dev-Profil: lokaler Broker. Mock-HA (WebSocket + MCP) folgt mit M6.
+  # Dev-Profil: lokaler Broker und Mock-HA (WebSocket /api/websocket + MCP /api/mcp).
+  # Für die Bridge: HA_URL=ws://mock-ha:8123/api/websocket, HA_MCP_URL=http://mock-ha:8123/api/mcp
+  mock-ha:
+    profiles: [dev]
+    build: .
+    command: ["python", "-m", "smart_bridge.mock_ha"]
+    expose: ["8123"]
+
   mosquitto:
     profiles: [dev]
     image: eclipse-mosquitto:2

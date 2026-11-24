@@ -38,8 +38,8 @@ def test_committed_schema_is_current() -> None:
         "rules: [{id: a, alert: {target: t, severity: info}, condition: {numeric_state: "
         "{entity_id: x.y}}}]",
         "rules: [{id: a, actions: [{type: nope}], triggers: [{type: startup}]}]",
-        "rules: [{id: a, actions: [{type: delay}], triggers: [{type: time, at: '25:00'}]}]",
-        "rules: [{id: a, actions: [{type: delay}], triggers: [{type: time, at: '22:30', "
+        "rules: [{id: a, actions: [{type: delay, duration: '00:00:05'}], triggers: [{type: time, at: '25:00'}]}]",
+        "rules: [{id: a, actions: [{type: delay, duration: '00:00:05'}], triggers: [{type: time, at: '22:30', "
         "catch_up: within}]}]",
         "rules: [{id: a, alert: {target: t, severity: info}, triggers: [{type: startup}]},"
         " {id: a, alert: {target: t, severity: info}, triggers: [{type: startup}]}]",
@@ -54,7 +54,7 @@ def test_invalid_rules_are_rejected(body: str) -> None:
 
 def test_missed_fire_within_valid() -> None:
     text = (
-        "rules: [{id: a, actions: [{type: delay}], "
+        "rules: [{id: a, actions: [{type: delay, duration: '00:00:05'}], "
         "triggers: [{type: time, at: '22:30', catch_up: within, catch_up_within: '00:30:00'}]}]"
     )
     rules, errors = parse_rules_text(text)
@@ -70,3 +70,22 @@ def test_condition_entity_ids_nested() -> None:
     assert not errors
     cond = rules[0].condition
     assert cond is not None and cond.entity_ids() == {"a.b", "c.d"}
+
+
+@pytest.mark.parametrize(
+    "action",
+    [
+        "{type: ha_tool}",
+        "{type: ha_service, service: lightturn_on}",
+        "{type: delay, duration: '5s'}",
+        "{type: mqtt_publish, topic: a}",
+        "{type: if, condition: {workday: true}, then: []}",
+        "{type: choose, choices: [{condition: {workday: true}}]}",
+        "{type: wait_for, condition: {state: {entity_id: a.b}}}",
+    ],
+)
+def test_action_parameters_are_validated(action: str) -> None:
+    _, errors = parse_rules_text(
+        f"rules: [{{id: a, triggers: [{{type: startup}}], actions: [{action}]}}]"
+    )
+    assert errors
