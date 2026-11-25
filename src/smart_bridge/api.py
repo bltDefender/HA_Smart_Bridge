@@ -53,6 +53,7 @@ from .settings import Settings
 from .simulate import Env, backtest_rule
 from .state import StateStore
 from .ui import UiReader, build_ui_router, rule_to_yaml
+from .ui.static import mount_ui, resolve_dist
 
 log = logging.getLogger(__name__)
 
@@ -572,6 +573,7 @@ def app_factory() -> FastAPI:
         search=ui_search if catalog else None,
     )
     app.include_router(build_ui_router(ui_reader, settings.ui_token))
+    mount_ui(app, resolve_dist(settings.ui_dist_dir), settings.ui_frame_ancestors)
 
     @app.get("/api/state")
     async def api_state() -> dict[str, Any]:

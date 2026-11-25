@@ -12,3 +12,6 @@ data/
 
 config/approvals/*
 !config/approvals/.gitkeep
+ui/dist/
+ui/test-results/
+ui/playwright-report/
