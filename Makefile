@@ -1,4 +1,4 @@
-.PHONY: up down logs test lint validate schema
+.PHONY: up down logs test lint validate schema ui
 
 up:
 	docker compose up -d --build
@@ -22,3 +22,6 @@ validate:
 
 schema:
 	uv run bridge schema -o docs/rule.schema.json
+
+ui:
+	cd ui && npm ci && npm run check && npm test && npm run build

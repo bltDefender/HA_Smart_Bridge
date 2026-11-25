@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+_CSP_SOURCE = re.compile(r"^(?:'self'|'none'|\*|[A-Za-z][A-Za-z0-9+.-]*:|[A-Za-z0-9*.:/-]+)$")
+
+
+def parse_frame_ancestors(value: str) -> str:
+    """CSP-Quellenliste für `frame-ancestors`; `self`/`none` dürfen ohne Quotes stehen."""
+    sources = [f"'{s}'" if s in ("self", "none") else s for s in value.split()]
+    if not sources or not all(_CSP_SOURCE.match(s) for s in sources):
+        raise ValueError(f"ungültige UI_FRAME_ANCESTORS: {value!r}")
+    return " ".join(sources)
 
 
 def _secret(env: Mapping[str, str], name: str) -> str | None:
@@ -51,6 +62,8 @@ class Settings:
     bridge_public_url: str | None = None
     approval_secret: str | None = None
     ui_token: str | None = None
+    ui_dist_dir: Path | None = None
+    ui_frame_ancestors: str = "'self'"
     approval_ttl_hours: int = 24
     rule_scan_seconds: float = 2.0
 
@@ -94,6 +107,8 @@ class Settings:
             bridge_public_url=(e.get("BRIDGE_PUBLIC_URL") or "").rstrip("/") or None,
             approval_secret=_secret(e, "APPROVAL_SECRET"),
             ui_token=_secret(e, "UI_TOKEN"),
+            ui_dist_dir=Path(e["UI_DIST_DIR"]) if e.get("UI_DIST_DIR") else None,
+            ui_frame_ancestors=parse_frame_ancestors(e.get("UI_FRAME_ANCESTORS") or "self"),
             approval_ttl_hours=int(e.get("APPROVAL_TTL_HOURS", "24")),
             rule_scan_seconds=float(e.get("RULE_SCAN_SECONDS", "2")),
         )

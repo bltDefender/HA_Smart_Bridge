@@ -1,4 +1,11 @@
-# UI-Build-Stage folgt mit M12 (Svelte + Vite) und wird hier als erste Stage ergänzt.
+FROM node:22-slim AS ui
+WORKDIR /ui
+COPY ui/package.json ui/package-lock.json ./
+RUN npm ci
+COPY ui/index.html ui/vite.config.ts ui/svelte.config.js ui/tsconfig.json ./
+COPY ui/src ./src
+RUN npm run build
+
 FROM python:3.12-slim AS builder
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 WORKDIR /app
@@ -21,7 +28,8 @@ WORKDIR /app
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/src /app/src
 COPY --from=builder /app/models /app/models
-ENV EMBED_CACHE_DIR=/app/models PATH="/app/.venv/bin:$PATH" CONFIG_DIR=/app/config DATA_DIR=/app/data
+COPY --from=ui /ui/dist /app/ui
+ENV UI_DIST_DIR=/app/ui EMBED_CACHE_DIR=/app/models PATH="/app/.venv/bin:$PATH" CONFIG_DIR=/app/config DATA_DIR=/app/data
 USER bridge
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
