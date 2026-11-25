@@ -13,6 +13,7 @@ import aiohttp
 
 from ..backoff import Backoff
 from ..events import BridgeEvent, EventSink
+from ..metrics import BridgeMetrics
 from ..state import EntityState, StateStore
 
 log = logging.getLogger(__name__)
@@ -55,6 +56,7 @@ class HaWebSocket:
         backoff: Backoff | None = None,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         command_timeout: float = 10.0,
+        metrics: BridgeMetrics | None = None,
     ) -> None:
         self._url, self._token = url, token
         self._store, self._sink = store, sink
@@ -62,6 +64,7 @@ class HaWebSocket:
         self._backoff = backoff or Backoff()
         self._sleep = sleep
         self._timeout = command_timeout
+        self._metrics = metrics
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._next_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
@@ -76,12 +79,16 @@ class HaWebSocket:
         async with aiohttp.ClientSession() as session:
             while True:
                 try:
+                    if self._metrics:
+                        self._metrics.inc("ha_connection_attempts")
                     await self._session(session)
                 except HaAuthError:
                     log.error("HA authentication failed; not retrying")
                     raise
                 except Exception as exc:  # jeder andere Fehler: neu verbinden statt sterben
                     log.warning("HA connection lost: %r", exc)
+                    if self._metrics:
+                        self._metrics.inc("ha_reconnects")
                 finally:
                     self._on_disconnect()
                 await self._sleep(self._backoff.next_delay())
@@ -148,6 +155,8 @@ class HaWebSocket:
                     else:
                         fut.set_exception(HaConnectionError(str(data.get("error"))))
             elif kind == "event":
+                if self._metrics:
+                    self._metrics.inc("ha_events")
                 if self._buffer is not None:
                     self._buffer.append(data)
                 else:
@@ -174,8 +183,13 @@ class HaWebSocket:
         cid = self._next_id
         fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[cid] = fut
-        await ws.send_json({"id": cid, **payload})
-        return await asyncio.wait_for(fut, self._timeout)
+        try:
+            await ws.send_json({"id": cid, **payload})
+            return await asyncio.wait_for(fut, self._timeout)
+        finally:
+            self._pending.pop(cid, None)
+            if not fut.done():
+                fut.cancel()
 
     # --- Ausgehend ------------------------------------------------------
 

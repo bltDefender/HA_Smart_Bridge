@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from smart_bridge.api import create_app
+from smart_bridge.metrics import BridgeMetrics
 from smart_bridge.settings import Settings
 
 
@@ -38,6 +39,23 @@ def test_ha_down_is_503_and_exception_is_down() -> None:
     assert _client({"mqtt": "raise"}).get("/readyz").status_code == 503
 
 
+def test_prometheus_metrics_expose_snapshot_and_counters() -> None:
+    metrics = BridgeMetrics()
+    metrics.inc("ha_reconnects")
+    metrics.set("stale_entities", 3)
+    app = create_app(
+        Settings.from_env({}),
+        metrics=metrics,
+        metrics_snapshot=lambda: metrics.set("entities", 8),
+    )
+    response = TestClient(app).get("/metrics")
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["content-type"]
+    assert "smart_bridge_ha_reconnects_total 1.0" in response.text
+    assert "smart_bridge_stale_entities 3.0" in response.text
+    assert "smart_bridge_entities 8.0" in response.text
+
+
 def test_app_factory_without_adapters_serves_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -49,6 +67,10 @@ def test_app_factory_without_adapters_serves_state(
     with TestClient(app_factory()) as client:
         assert client.get("/api/state").json() == {}
         assert client.get("/readyz").json()["status"] == "ok"
+        metrics = client.get("/metrics").text
+        assert "smart_bridge_ha_connected 0.0" in metrics
+        assert "smart_bridge_entities 0.0" in metrics
+        assert "smart_bridge_background_task_failures_total 0.0" in metrics
 
 
 def test_webhook_trigger_reaches_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

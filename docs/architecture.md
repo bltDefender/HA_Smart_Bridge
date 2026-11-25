@@ -199,12 +199,15 @@ Komponenten: `policy.py` (Stufen), `authoring/pipeline.py` (Validierung), `autho
 
 Tabellen: `approval_tokens` (Einmal-Nonces), `rule_trips` (Circuit-Breaker), `audit_log` (mit Diff).
 
-Grenzen: Beim Start laufen weder Entity-Prüfung noch Backtest (HA noch nicht synchronisiert); Zyklen nur ab 2 Regeln; entfernte MQTT-Topics bleiben bis zum Reconnect abonniert. Docker, echtes HA und der HA-Button-Flow sind ungetestet.
+Grenzen: Beim Start laufen weder Entity-Prüfung noch Backtest (HA noch nicht synchronisiert); Zyklen nur ab 2 Regeln. Docker, echtes HA und der HA-Button-Flow sind ungetestet.
 
 ## M11 – RuleGraph und UI-API
 `ui/graph.py` (reiner Builder), `ui/text.py` (Klartext), `ui/routes.py` (Router, SSE). Details in `docs/ui-api.md`. Der Router bekommt nur einen `UiReader` mit Lese-Callables; er importiert weder Executor, MCP, Approvals, Authoring noch Adapter (per Test erzwungen).
 
-Grenzen: keine statischen Assets und kein CSP `frame-ancestors` (M12); SSE pollt Snapshots im Sekundentakt; Heatmap in UTC-Tagen. Browser/EventSource, Docker und echtes HA ungetestet.
+Grenzen: SSE pollt Snapshots im Sekundentakt; Heatmap in UTC-Tagen. Browser/EventSource, Docker und echtes HA ungetestet.
 
 ## M12 – Web-UI
 `ui/` (Svelte/Vite) wird im Docker-Build erzeugt und von `ui/static.py` unter `/ui` ausgeliefert (GET/HEAD, CSP inkl. `frame-ancestors`). Details in `docs/ui.md`.
+
+## M13 – Hardening und Metriken
+HA- und MQTT-Reconnects sowie eingehende Events werden gezählt. MQTT-Backoff wird erst nach stabiler Verbindung zurückgesetzt, entfernte Regel-Topics werden beim Hot-Reload abbestellt. `/metrics` exponiert Prometheus-Metriken; `/readyz` schließt den Engine-Start ein. Fehler in Hintergrundtasks werden geloggt und gezählt. Details: `docs/observability.md`.

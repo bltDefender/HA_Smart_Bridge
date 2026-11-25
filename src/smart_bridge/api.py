@@ -45,6 +45,7 @@ from .executor import (
 )
 from .history import StateHistory
 from .mcp_server import ReadService, WriteService, build_mcp, guarded_route
+from .metrics import BridgeMetrics
 from .policy import Policy
 from .rules import Rule, duplicate_ids, load_dir
 from .scheduler import AstralSun, FireTimeStore, Scheduler, workday_provider
@@ -67,14 +68,27 @@ def _flag_check(flag: Callable[[], bool]) -> Check:
     return check
 
 
-def create_app(settings: Settings | None = None, checks: dict[str, Check] | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    checks: dict[str, Check] | None = None,
+    metrics: BridgeMetrics | None = None,
+    metrics_snapshot: Callable[[], None] | None = None,
+) -> FastAPI:
     app = FastAPI(title="smart-bridge")
     cfg = settings or Settings.from_env()
     registered = checks or {}
+    bridge_metrics = metrics or BridgeMetrics()
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/metrics", include_in_schema=False)
+    async def metrics_endpoint() -> Response:
+        if metrics_snapshot:
+            metrics_snapshot()
+        body, content_type = bridge_metrics.scrape()
+        return Response(content=body, media_type=content_type)
 
     @app.get("/readyz")
     async def readyz(response: Response) -> dict[str, Any]:
@@ -125,11 +139,25 @@ def app_factory() -> FastAPI:
     manager: RuleManager
 
     run_tasks: set[asyncio.Task[Any]] = set()
+    bridge_metrics = BridgeMetrics()
 
     def spawn(coro: Awaitable[Any]) -> None:
         task = asyncio.ensure_future(coro)
         run_tasks.add(task)
-        task.add_done_callback(run_tasks.discard)
+
+        def observe(done: asyncio.Task[Any]) -> None:
+            run_tasks.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                bridge_metrics.inc("background_task_failures")
+                log.error(
+                    "background task failed",
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        task.add_done_callback(observe)
 
     def counted(rule_id: str) -> bool:
         """Circuit-Breaker: `True`, wenn die Regel gestoppt wird (per_entity: je Original)."""
@@ -222,7 +250,7 @@ def app_factory() -> FastAPI:
         await engine.on_event(event)
 
     ha = (
-        HaWebSocket(settings.ha_url, settings.ha_token, store, sink)
+        HaWebSocket(settings.ha_url, settings.ha_token, store, sink, metrics=bridge_metrics)
         if settings.ha_url and settings.ha_token
         else None
     )
@@ -241,6 +269,7 @@ def app_factory() -> FastAPI:
             sink,
             engine.index.mqtt_filters(),
             on_connect=publisher.on_connect,
+            metrics=bridge_metrics,
         )
     if ha:
         targets = TargetCache(ha.fire_event)
@@ -477,6 +506,7 @@ def app_factory() -> FastAPI:
         await manager.run(settings.rule_scan_seconds)  # Hot-Reload-Watcher läuft bis zum Shutdown
 
     checks: dict[str, Check] = {}
+    checks["engine"] = _flag_check(lambda: engine_ready)
     if ha:
         checks["ha"] = _flag_check(lambda: ha.synced.is_set())
     if mqtt:
@@ -487,12 +517,39 @@ def app_factory() -> FastAPI:
     if catalog is not None:
         checks["qdrant"] = catalog.check
 
+    def update_metrics() -> None:
+        states = store.all()
+        bridge_metrics.set("ha_connected", float(bool(ha and ha.connected)))
+        bridge_metrics.set("ha_synced", float(bool(ha and ha.synced.is_set())))
+        bridge_metrics.set("mqtt_connected", float(bool(mqtt and mqtt.connected)))
+        bridge_metrics.set("ha_mcp_available", float(bool(mcp_backend and mcp_backend.available)))
+        bridge_metrics.set("entities", len(states))
+        bridge_metrics.set("stale_entities", sum(state.stale for state in states.values()))
+        bridge_metrics.set("rules", len(engine.rules))
+        bridge_metrics.set("active_alerts", len(alerts.alerts()))
+        bridge_metrics.set("actions_paused", float(executor.paused))
+
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         tasks = [asyncio.create_task(a.run()) for a in (ha, mqtt) if a is not None]
         tasks.append(asyncio.create_task(start_engine()))
         if catalog is not None:
             tasks.append(asyncio.create_task(catalog.run()))
+
+        def observe_lifecycle_task(task: asyncio.Task[Any]) -> None:
+            if task.cancelled():
+                return
+            error = task.exception()
+            if error is not None:
+                bridge_metrics.inc("background_task_failures")
+                log.error(
+                    "lifecycle task %s failed",
+                    task.get_name(),
+                    exc_info=(type(error), error, error.__traceback__),
+                )
+
+        for task in tasks:
+            task.add_done_callback(observe_lifecycle_task)
         try:
             async with AsyncExitStack() as stack:
                 if mcp_server is not None:
@@ -516,7 +573,7 @@ def app_factory() -> FastAPI:
             alerts.close()
             store.close()
 
-    app = create_app(settings, checks)
+    app = create_app(settings, checks, bridge_metrics, update_metrics)
     app.router.lifespan_context = lifespan
     if mcp_server is not None and settings.mcp_server_token:
         app.router.routes.append(guarded_route(mcp_server, settings.mcp_server_token))

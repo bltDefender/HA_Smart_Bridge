@@ -9,6 +9,7 @@ from aiohttp.test_utils import TestServer
 from smart_bridge.adapters.ha_ws import HaAuthError, HaWebSocket
 from smart_bridge.backoff import Backoff
 from smart_bridge.events import BridgeEvent
+from smart_bridge.metrics import BridgeMetrics
 from smart_bridge.state import StateStore
 
 
@@ -80,7 +81,13 @@ async def ha() -> AsyncIterator[tuple[FakeHa, TestServer]]:
     await server.close()
 
 
-def _adapter(server: TestServer, store: StateStore, events: list[BridgeEvent], token: str = "good"):  # type: ignore[no-untyped-def]
+def _adapter(
+    server: TestServer,
+    store: StateStore,
+    events: list[BridgeEvent],
+    token: str = "good",
+    metrics: BridgeMetrics | None = None,
+) -> HaWebSocket:
     async def sink(e: BridgeEvent) -> None:
         events.append(e)
 
@@ -96,6 +103,7 @@ def _adapter(server: TestServer, store: StateStore, events: list[BridgeEvent], t
         backoff=Backoff(0.0, 0.0),
         sleep=fast_sleep,
         command_timeout=2,
+        metrics=metrics,
     )
 
 
@@ -113,13 +121,14 @@ async def test_full_sync_events_stale_and_reconnect(ha: tuple[FakeHa, TestServer
     ]
     store = StateStore()
     events: list[BridgeEvent] = []
+    metrics = BridgeMetrics()
     changes: list[tuple[str, bool]] = []
 
     async def listener(c) -> None:  # type: ignore[no-untyped-def]
         changes.append((c.entity_id, c.state_changed))
 
     store.subscribe(listener)
-    adapter = _adapter(server, store, events)
+    adapter = _adapter(server, store, events, metrics=metrics)
     task = asyncio.create_task(adapter.run())
     try:
         # Nach Verbindung 1 (dann Abbruch) und Verbindung 2 ist alles synchron
@@ -134,6 +143,10 @@ async def test_full_sync_events_stale_and_reconnect(ha: tuple[FakeHa, TestServer
         assert changes.count(("light.a", True)) == 3  # initial, ->off, ->on nach Reconnect
         await adapter.call_service("light", "turn_on", target={"entity_id": "light.a"})
         assert fake.service_calls[0]["service"] == "turn_on"
+        payload, _ = metrics.scrape()
+        assert b"smart_bridge_ha_connection_attempts_total 2.0" in payload
+        assert b"smart_bridge_ha_reconnects_total 1.0" in payload
+        assert b"smart_bridge_ha_events_total 2.0" in payload
     finally:
         task.cancel()
 
@@ -167,3 +180,19 @@ async def test_invalid_token_is_fatal(ha: tuple[FakeHa, TestServer]) -> None:
     adapter = _adapter(server, StateStore(), [], token="bad")
     with pytest.raises(HaAuthError):
         await asyncio.wait_for(adapter.run(), 5)
+
+
+async def test_timed_out_command_is_removed_from_pending() -> None:
+    class NoReplySocket:
+        async def send_json(self, _: dict[str, Any]) -> None:
+            return None
+
+    adapter = HaWebSocket("ws://unused", "token", StateStore(), _noop, command_timeout=0.01)
+    adapter._ws = NoReplySocket()  # type: ignore[assignment]
+    with pytest.raises(TimeoutError):
+        await adapter.command({"type": "get_states"})
+    assert adapter._pending == {}
+
+
+async def _noop(_: BridgeEvent) -> None:
+    return None
