@@ -9,6 +9,7 @@ import pytest
 from smart_bridge.adapters.mqtt import STATUS_TOPIC, MqttAdapter, MqttNotConnectedError
 from smart_bridge.backoff import Backoff
 from smart_bridge.events import BridgeEvent
+from smart_bridge.metrics import BridgeMetrics
 
 
 @dataclass
@@ -32,6 +33,9 @@ class FakeClient:
 
     async def subscribe(self, topic: str) -> None:
         self.log.append(("sub", topic))
+
+    async def unsubscribe(self, topic: str) -> None:
+        self.log.append(("unsub", topic))
 
     async def publish(self, topic: str, payload: Any = None, retain: bool = False) -> None:
         self.log.append(("pub", (topic, payload, retain)))
@@ -81,6 +85,15 @@ async def test_publish_requires_connection() -> None:
         await adapter.publish("x", "y")
 
 
+async def test_set_topics_unsubscribes_removed_and_subscribes_new_filters() -> None:
+    log: list[tuple[str, Any]] = []
+    adapter = MqttAdapter(lambda: FakeClient([], False, log), _noop, ["old/#"])
+    client = FakeClient([], False, log)
+    adapter._client = client
+    await adapter.set_topics(["new/#", "keep/#"])
+    assert log == [("unsub", "old/#"), ("sub", "new/#"), ("sub", "keep/#")]
+
+
 async def _noop(_: BridgeEvent) -> None:
     return None
 
@@ -97,3 +110,49 @@ async def test_on_connect_runs_after_subscribe() -> None:
         await adapter.run()
     kinds = [k for k, _ in log]
     assert kinds.index("hook") > kinds.index("sub")
+
+
+async def test_short_mqtt_flaps_preserve_exponential_backoff() -> None:
+    class FlappingClient(FakeClient):
+        @property
+        def messages(self) -> AsyncIterator[Msg]:
+            async def gen() -> AsyncIterator[Msg]:
+                if False:
+                    yield Msg("unused", b"")
+
+            return gen()
+
+    attempts = 0
+    delays: list[float] = []
+    now = 0.0
+    metrics = BridgeMetrics()
+
+    def factory() -> FlappingClient:
+        nonlocal attempts
+        attempts += 1
+        return FlappingClient([], False, [])
+
+    async def sleep(delay: float) -> None:
+        nonlocal now
+        delays.append(delay)
+        now += delay
+        if len(delays) == 3:
+            raise asyncio.CancelledError
+
+    adapter = MqttAdapter(
+        factory,
+        _noop,
+        backoff=Backoff(1, 8),
+        sleep=sleep,
+        metrics=metrics,
+        stable_after=30,
+        monotonic=lambda: now,
+    )
+    with contextlib.suppress(asyncio.CancelledError):
+        await adapter.run()
+
+    assert attempts == 3
+    assert delays == [1, 2, 4]
+    payload, _ = metrics.scrape()
+    assert b"smart_bridge_mqtt_reconnects_total 3.0" in payload
+    assert b"smart_bridge_mqtt_connection_attempts_total 3.0" in payload

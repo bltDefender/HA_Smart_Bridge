@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 
 import pytest
 
@@ -66,3 +67,18 @@ async def test_snapshot_survives_restart_as_stale(tmp_path: Path) -> None:
     second = StateStore(db)
     st = second.get("a.b")
     assert st is not None and st.stale and st.attributes == {"x": [1]} and st.last_changed == T1
+
+
+async def test_bulk_sync_load_keeps_state_and_stale_invariant() -> None:
+    store = StateStore()
+    seen = _collect(store)
+    states = [EntityState(f"sensor.load_{i}", str(i), {"index": i}, T1) for i in range(2_000)]
+    started = perf_counter()
+    changes = await store.replace_all(states)
+    elapsed = perf_counter() - started
+
+    assert len(changes) == len(seen) == 2_000
+    assert len(store.all()) == 2_000
+    store.mark_all_stale()
+    assert sum(state.stale for state in store.all().values()) == 2_000
+    assert elapsed < 10  # großzügiges CI-Limit für einen lokalen SQLite-Vollsync
