@@ -167,6 +167,9 @@ class Catalog:
 
     # --- Sync -------------------------------------------------------------------
 
+    def area_of(self, entity_id: str) -> str | None:
+        return self._registry.area_of(entity_id)
+
     def request_sync(self) -> None:
         self._wanted.set()
 

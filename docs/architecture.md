@@ -44,7 +44,7 @@ flowchart LR
 | `executor` | MCP, WS, MQTT, Webhook, `rule_runs` | M6 ✔ |
 | `mock_ha` | Mock-HA (WS + MCP) für Dev/Tests | M6 ✔ |
 | `catalog` | Registry-Sync, Embeddings, Qdrant, `state_history` | M8 ✔ |
-| `mcp_server` | Claude-Schnittstelle | M9/M10 |
+| `mcp_server`, `simulate`, `audit` | Claude-Schnittstelle (lesend M9 ✔, Schreiben M10) | M9/M10 |
 | `graph`, `ui_api` | RuleGraph, `/ui` | M11 |
 
 ## Datenmodell
@@ -183,3 +183,25 @@ Paket `executor/` (Engine → `ActionsRequested` → Hintergrund-Task je Lauf, d
 - **Embeddings** (`catalog/embedder.py`): `fastembed` lokal mit `passage:`/`query:`-Präfix. `multilingual-e5-small` ist in fastembed nicht vordefiniert und wird per `add_custom_model` registriert. `EMBED_MODEL=hash` nutzt einen deterministischen Hash-Embedder (Dev/Tests, kein Download). `QDRANT_URL=:memory:` nutzt Qdrants lokalen Modus.
 - **`state_history`** (`history.py`): SQLite, nur Entities im Trigger-Index oder Katalog; Retention `STATE_HISTORY_DAYS` (Standard 14), stündliches Prune; `changes()` liefert Anfangszustand + Wechsel als Grundlage für Backtests (M9).
 - **Nicht in M8**: Collection `alert_history`, Inkrement pro Einzel-Entity (aktuell Vollabgleich mit Hash-Vergleich). Ungetestet: Docker, echtes Qdrant/HA und der Modell-Download von `multilingual-e5-small` (ONNX-Pfad `onnx/model.onnx` angenommen).
+
+## M9: MCP-Server (read-only)
+
+- **Server** (`mcp_server/`): FastMCP, Streamable HTTP unter `/mcp`, im selben FastAPI-Prozess. Aktiv mit `MCP_SERVER_ENABLED=true`; ohne `MCP_SERVER_TOKEN` startet die Bridge nicht. Das Bearer-Token wird per `hmac.compare_digest` geprüft (`BearerAuth`), alle anderen Routen bleiben unberührt. DNS-Rebinding-Schutz ist aus, das Token ersetzt ihn.
+- **`ReadService`** hält die Logik als normale async-Methoden (ohne MCP testbar); `server.py` registriert nur dünne Tool-Wrapper. Fehler (`ToolError`) kommen als Klartext zurück.
+- **`simulate_rule`/`backtest_rule`** (`simulate.py`): Wegwerf-`RuleEngine` mit Snapshot-`StateStore`, virtueller Uhr (`ManualTimers`) und Collector-Sink. Kein Executor, kein AlertStore, kein Netzwerk; Aktionen werden nur gesammelt. `at` rekonstruiert den Zustand aus `state_history`. Backtest: `days` auf die Retention begrenzt, Ergebnis je Regel mit Aktivierungen (Start, Ende, Dauer), Aktionen und `fires_per_day`.
+- **Grenzen des Backtests**: Es werden nur Zustandswechsel aus `state_history` nachgespielt. Zeit-/Sonnen-Trigger und Fensterwechsel nicht (`unreplayed_triggers`, `notes`). Entities ohne Historie stehen in `entities_without_history`. Eine neue Regel erfasst erst ab Anlage Historie (M10 nimmt ihre Entities in die Aufzeichnung auf).
+- **Audit** (`audit.py`): Tabelle `audit_log` in SQLite plus JSON-Log; Details werden von Token/Secret/Passwort-Schlüsseln bereinigt. Jeder Tool-, Resource- und Prompt-Aufruf wird protokolliert (Akteur `claude-mcp`).
+- **Resources/Prompt**: `bridge://docs/rule-schema`, `docs/rule-examples`, `policy` (read-only), `rules/{id}`, `entities/{entity_id}`, `alerts`; Prompt `author_rule`.
+- Schreibende Tools und Versionierung kamen mit M10 (siehe unten). Docker und echtes HA ungetestet.
+
+## M10 – Rule-Authoring
+Komponenten: `policy.py` (Stufen), `authoring/pipeline.py` (Validierung), `authoring/repository.py` (Git, Soft-Delete), `authoring/manager.py` (Watcher, MCP-Schreibpfad, Status), `authoring/breaker.py`, `approvals.py`, `mcp_server/writes.py`. Details in `docs/policy.md`.
+
+Tabellen: `approval_tokens` (Einmal-Nonces), `rule_trips` (Circuit-Breaker), `audit_log` (mit Diff).
+
+Grenzen: Beim Start laufen weder Entity-Prüfung noch Backtest (HA noch nicht synchronisiert); Zyklen nur ab 2 Regeln; entfernte MQTT-Topics bleiben bis zum Reconnect abonniert. Docker, echtes HA und der HA-Button-Flow sind ungetestet.
+
+## M11 – RuleGraph und UI-API
+`ui/graph.py` (reiner Builder), `ui/text.py` (Klartext), `ui/routes.py` (Router, SSE). Details in `docs/ui-api.md`. Der Router bekommt nur einen `UiReader` mit Lese-Callables; er importiert weder Executor, MCP, Approvals, Authoring noch Adapter (per Test erzwungen).
+
+Grenzen: keine statischen Assets und kein CSP `frame-ancestors` (M12); SSE pollt Snapshots im Sekundentakt; Heatmap in UTC-Tagen. Browser/EventSource, Docker und echtes HA ungetestet.

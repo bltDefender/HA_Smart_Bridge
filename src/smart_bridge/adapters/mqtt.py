@@ -115,6 +115,14 @@ class MqttAdapter:
                 self._client, self.connected = None, False
             await self._sleep(self._backoff.next_delay())
 
+    async def set_topics(self, topics: Sequence[str]) -> None:
+        """Hot-Reload: neue Filter sofort abonnieren (alte bleiben bis zum Reconnect bestehen)."""
+        new = [t for t in topics if t not in self._topics]
+        self._topics = list(topics)
+        if self._client is not None:
+            for topic in new:
+                await self._client.subscribe(topic)
+
     async def publish(self, topic: str, payload: str | bytes, retain: bool = False) -> None:
         if self._client is None:
             raise MqttNotConnectedError(topic)

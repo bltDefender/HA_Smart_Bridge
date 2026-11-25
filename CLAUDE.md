@@ -16,6 +16,7 @@ smart-bridge: eigenständige Bridge neben Home Assistant (Receive, Carry, Proces
 - Zeitlogik nur mit tz-aware Datetimes. Jede Scheduler-Änderung braucht DST- und Missed-Fire-Tests.
 - Jede neue Regel-Funktion braucht Backtest- und Rollback-Tests.
 - Neue MCP-Tools brauchen: Schema, Test, Audit-Eintrag und Eintrag in `docs/mcp.md`.
+- Stufe wird nach Inhalt bestimmt (`policy.py`); unbekannte Aktionen sind Stufe 2. Freigabe nur per CLI/Webhook (`approvals.py`), nie per MCP/UI.
 - Die RuleEngine kennt kein HA und kein Netzwerk; Zeit und Zustand werden injiziert.
 - Keine Cloud-Dienste, keine Secrets im Repo (`.env`, `secrets/`).
 

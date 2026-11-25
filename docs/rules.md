@@ -21,3 +21,6 @@ Format: `config/rules/*.yaml` mit Schlüssel `rules:`. JSON Schema: [rule.schema
 - `debounce: "00:00:10"`: Trailing-Entprellung, es feuert nur der letzte Trigger nach Ruhe (gilt nicht für `startup`).
 - `max_runs_per_hour: n`: gleitendes Stundenfenster für `actions` und `on_activate`; weitere Läufe werden verworfen und geloggt. `on_clear` wird nie begrenzt.
 - Beispiele: `config/rules/examples.yaml`.
+
+## Authoring (M10)
+`status` und `tier` werden von der Bridge berechnet und dürfen nicht im YAML stehen. Direkt geschriebene Dateien durchlaufen dieselbe Pipeline und werden mit `created_by: file` auditiert. Siehe `docs/policy.md`.
